@@ -264,7 +264,9 @@ def test_runner_repairs_invalid_reviewer_output_once(tmp_path: Path, monkeypatch
     (tmp_path / "scripts").mkdir()
     (tmp_path / "specs" / "demo-spec.md").write_text("# demo spec", encoding="utf-8")
     (tmp_path / "AGENTS.md").write_text("# repo rules", encoding="utf-8")
-    (tmp_path / "pyproject.toml").write_text("[project]\nname='demo'\nversion='0.0.0'\n", encoding="utf-8")
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname='demo'\nversion='0.0.0'\n", encoding="utf-8"
+    )
     (tmp_path / "prompts" / "test_writer.md").write_text("test writer", encoding="utf-8")
     (tmp_path / "prompts" / "implementer.md").write_text("implementer", encoding="utf-8")
     (tmp_path / "prompts" / "reviewer.md").write_text("reviewer", encoding="utf-8")
@@ -329,7 +331,9 @@ def test_runner_fails_when_test_generation_requests_more_input_without_writing_t
     (tmp_path / "tests").mkdir()
     (tmp_path / "specs" / "demo-spec.md").write_text("# demo spec", encoding="utf-8")
     (tmp_path / "AGENTS.md").write_text("# repo rules", encoding="utf-8")
-    (tmp_path / "pyproject.toml").write_text("[project]\nname='demo'\nversion='0.0.0'\n", encoding="utf-8")
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname='demo'\nversion='0.0.0'\n", encoding="utf-8"
+    )
     (tmp_path / "prompts" / "test_writer.md").write_text("test writer", encoding="utf-8")
     (tmp_path / "prompts" / "implementer.md").write_text("implementer", encoding="utf-8")
     (tmp_path / "prompts" / "reviewer.md").write_text("reviewer", encoding="utf-8")
@@ -473,7 +477,9 @@ def test_runner_includes_artifact_snapshot_in_initial_review_prompt(tmp_path: Pa
     )
     (tmp_path / "specs" / "demo-spec.md").write_text("# demo spec", encoding="utf-8")
     (tmp_path / "AGENTS.md").write_text("# repo rules", encoding="utf-8")
-    (tmp_path / "pyproject.toml").write_text("[project]\nname='demo'\nversion='0.0.0'\n", encoding="utf-8")
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname='demo'\nversion='0.0.0'\n", encoding="utf-8"
+    )
     (tmp_path / "prompts" / "reviewer.md").write_text("reviewer", encoding="utf-8")
 
     class SingleReviewProvider:
@@ -529,7 +535,9 @@ def test_enforce_test_freeze_detects_modified_tests(tmp_path: Path):
 
 def test_enforce_reviewer_immutability_detects_repo_changes(tmp_path: Path):
     (tmp_path / "AGENTS.md").write_text("# repo rules", encoding="utf-8")
-    (tmp_path / "pyproject.toml").write_text("[project]\nname='demo'\nversion='0.0.0'\n", encoding="utf-8")
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname='demo'\nversion='0.0.0'\n", encoding="utf-8"
+    )
     scripts_dir = tmp_path / "scripts"
     scripts_dir.mkdir()
     (scripts_dir / "run.sh").write_text("#!/bin/sh\n", encoding="utf-8")
@@ -557,7 +565,9 @@ def test_run_pytest_gate_invokes_uv_run_python_module(tmp_path: Path, monkeypatc
     (tmp_path / "specs").mkdir()
     (tmp_path / "specs" / "demo-spec.md").write_text("# demo spec\n", encoding="utf-8")
     (tmp_path / "AGENTS.md").write_text("# repo rules", encoding="utf-8")
-    (tmp_path / "pyproject.toml").write_text("[project]\nname='demo'\nversion='0.0.0'\n", encoding="utf-8")
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname='demo'\nversion='0.0.0'\n", encoding="utf-8"
+    )
     scripts_dir = tmp_path / "scripts"
     scripts_dir.mkdir()
     (scripts_dir / "run.sh").write_text("#!/bin/sh\n", encoding="utf-8")
@@ -588,7 +598,9 @@ def test_run_pytest_gate_fails_on_nonzero_exit(tmp_path: Path, monkeypatch):
     (tmp_path / "specs").mkdir()
     (tmp_path / "specs" / "demo-spec.md").write_text("# demo spec\n", encoding="utf-8")
     (tmp_path / "AGENTS.md").write_text("# repo rules", encoding="utf-8")
-    (tmp_path / "pyproject.toml").write_text("[project]\nname='demo'\nversion='0.0.0'\n", encoding="utf-8")
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname='demo'\nversion='0.0.0'\n", encoding="utf-8"
+    )
 
     runner = PipelineRunner(repo_root=tmp_path, task="demo", provider=DummyProvider())
 

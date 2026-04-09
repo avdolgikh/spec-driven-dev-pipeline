@@ -662,9 +662,7 @@ class PipelineRunner:
     def _is_task_test_file(self, relative_path: str) -> bool:
         return any(term in relative_path.lower() for term in self._task_test_terms)
 
-    def _changed_task_test_files(
-        self, before: dict[str, str], after: dict[str, str]
-    ) -> list[str]:
+    def _changed_task_test_files(self, before: dict[str, str], after: dict[str, str]) -> list[str]:
         return [
             path
             for path, digest in after.items()

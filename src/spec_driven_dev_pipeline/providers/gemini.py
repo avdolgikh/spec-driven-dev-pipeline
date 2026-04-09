@@ -77,7 +77,11 @@ class GeminiProvider:
             result = call.get("result")
             result_str = ""
             if result is not None and result != "":
-                raw = json.dumps(result, ensure_ascii=False) if isinstance(result, (dict, list)) else str(result)
+                raw = (
+                    json.dumps(result, ensure_ascii=False)
+                    if isinstance(result, (dict, list))
+                    else str(result)
+                )
                 result_str = self._tail(raw, limit=200)
             parts = [p for p in (target, result_str) if p]
             summaries.append(f"{name}: {' -> '.join(parts)}" if parts else f"{name}: completed")

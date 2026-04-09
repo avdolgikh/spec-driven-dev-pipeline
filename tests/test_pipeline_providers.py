@@ -68,7 +68,7 @@ def test_codex_provider_default_role_models_are_explicit():
 def test_codex_provider_reads_last_message_from_workspace_scratch(tmp_path: Path, monkeypatch):
     provider = CodexProvider()
     provider.executable = tmp_path / "codex.cmd"
-    provider.executable.write_text("@echo off\n", encoding="utf-8")
+    provider.executable.write_text("@echo off\\n", encoding="utf-8")
     captured: dict[str, object] = {}
 
     def fake_run(command, **kwargs):
@@ -108,7 +108,7 @@ def test_codex_provider_reads_last_message_from_workspace_scratch(tmp_path: Path
 def test_codex_provider_surfaces_process_diagnostics_on_failure(tmp_path: Path, monkeypatch):
     provider = CodexProvider()
     provider.executable = tmp_path / "codex.cmd"
-    provider.executable.write_text("@echo off\n", encoding="utf-8")
+    provider.executable.write_text("@echo off\\n", encoding="utf-8")
 
     def fake_run(command, **kwargs):  # noqa: ANN001
         output_path = Path(command[command.index("--output-last-message") + 1])
@@ -185,3 +185,31 @@ def test_gemini_extract_response_includes_tool_call_summary():
     assert summary
     assert "write_file" in summary
     assert "tests/test_sample.py" in summary
+
+
+def test_gemini_extract_response_shows_tool_output_when_response_is_empty():
+    provider = GeminiProvider()
+    payload = json.dumps(
+        {
+            "response": "",
+            "toolCalls": [
+                {
+                    "name": "write_file",
+                    "parameters": {"path": "new_file.txt"},
+                    "result": "created new_file.txt",
+                },
+                {
+                    "name": "run_shell_command",
+                    "parameters": {"command": "echo hello"},
+                    "result": "hello\\n",
+                },
+            ],
+        }
+    )
+
+    summary = provider._extract_response(payload)
+
+    assert summary
+    assert "Tool activity:" in summary
+    assert "write_file: new_file.txt -> created new_file.txt" in summary
+    assert 'run_shell_command: {"command": "echo hello"} -> hello\\n' in summary
