@@ -366,10 +366,15 @@ def test_runner_fails_when_test_generation_requests_more_input_without_writing_t
     assert "did not modify tests/" in str(exc_info.value)
 
 
-def _make_effect_check_runner(tmp_path: Path, test_files: dict[str, str] | None = None):
+def _make_effect_check_runner(
+    tmp_path: Path,
+    test_files: dict[str, str] | None = None,
+    *,
+    spec_content: str = "# demo spec\n",
+):
     """Set up a runner and capture before-state for _ensure_tests_stage_effect tests."""
     (tmp_path / "specs").mkdir(exist_ok=True)
-    (tmp_path / "specs" / "demo-spec.md").write_text("# demo spec\n", encoding="utf-8")
+    (tmp_path / "specs" / "demo-spec.md").write_text(spec_content, encoding="utf-8")
     tests_dir = tmp_path / "tests"
     tests_dir.mkdir(exist_ok=True)
     for name, content in (test_files or {}).items():
@@ -447,6 +452,23 @@ def test_tests_stage_effect_allows_new_task_specific_test_file(tmp_path: Path):
     runner, bh, bfh = _make_effect_check_runner(tmp_path)
     (tmp_path / "tests" / "test_demo.py").write_text(
         "def test_demo():\n    assert True\n", encoding="utf-8"
+    )
+    runner._ensure_tests_stage_effect(
+        before_hash=bh,
+        execution=_dummy_execution(),
+        stage_label="Stage 1: Test Generation",
+        allow_existing=True,
+        before_file_hashes=bfh,
+    )
+
+
+def test_tests_stage_effect_accepts_spec_derived_test_names(tmp_path: Path):
+    """When the spec mentions `seed.py`, creating `test_seed.py` satisfies Stage 1."""
+    runner, bh, bfh = _make_effect_check_runner(
+        tmp_path, spec_content="# Spec\nCreate `seed.py` module.\n"
+    )
+    (tmp_path / "tests" / "test_seed.py").write_text(
+        "def test_seed():\n    assert True\n", encoding="utf-8"
     )
     runner._ensure_tests_stage_effect(
         before_hash=bh,

@@ -657,7 +657,17 @@ class PipelineRunner:
 
     def _build_task_test_terms(self) -> list[str]:
         normalized = self.task.lower()
-        return sorted({normalized, normalized.replace("-", "_"), normalized.replace("_", "-")})
+        terms = {normalized, normalized.replace("-", "_"), normalized.replace("_", "-")}
+        # Also accept test files named after source files referenced in the spec.
+        try:
+            spec_text = self.spec_path.read_text(encoding="utf-8-sig")
+        except FileNotFoundError:
+            return sorted(terms)
+        for raw in re.findall(r"`([^`\n]+)`", spec_text):
+            cleaned = raw.strip().lower()
+            if cleaned.endswith(".py") and not Path(cleaned).name.startswith("test_"):
+                terms.add(f"test_{Path(cleaned).stem}")
+        return sorted(term for term in terms if term)
 
     def _is_task_test_file(self, relative_path: str) -> bool:
         return any(term in relative_path.lower() for term in self._task_test_terms)

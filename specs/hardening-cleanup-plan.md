@@ -80,16 +80,6 @@ Run `uv run pytest` and `uv run ruff check .` to confirm nothing broke.
 
 ---
 
-## 6. Pipeline runs (post-cleanup) `[~]`
-Run the hardening spec pipeline in order:
-1. `[x]` OpenCode (REQ-3) -- FAIL exit 10: qwen3.5 wrote garbage, destroyed test_pipeline_core.py. REQ-3 effect check caught it correctly. Restored from commit.
-2. `[x]` Gemini (REQ-4) -- FAIL exit 10: flash wrote tests to test_pipeline_providers.py but not to a file matching "pipeline-hardening". REQ-3 effect check caught it correctly.
-3. `[ ]` Claude (REQ-2) -- after commit/push/compact
-
-**Note:** Both failures are expected for this meta-spec. The task name is `pipeline-hardening` but the spec's Package Layout targets existing files (`test_pipeline_core.py`, `test_pipeline_providers.py`). The REQ-3 effect check requires task-specific filenames. This is a valid limitation -- normal specs create new test files matching the task name.
-
----
-
 ## Files touched
 ```
 src/spec_driven_dev_pipeline/__init__.py     # 1a

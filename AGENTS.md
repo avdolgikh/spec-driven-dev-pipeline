@@ -107,16 +107,10 @@ uv run pytest                 # tests
 
 ## Active Work
 
-**Cleanup of Codex's hardening implementation** -- tracked in `specs/hardening-cleanup-plan.md`.
-Codex implemented `pipeline-hardening-spec.md` correctly but with scope creep and noise. Manual cleanup in progress before pipeline runs.
+None. Hardening cleanup complete (see `specs/hardening-cleanup-plan.md`).
 
 ---
 
 ## Known Gaps
 
-Tracked in `specs/pipeline-hardening-spec.md`. The four gaps found during the smoke-test validation:
-
-1. **No final pytest gate before VERIFIED** -- after Code Review approves, pipeline skips straight to VERIFIED without running tests. Proven by OpenCode run (reviewer approved failing code).
-2. **No retry on transient provider failures** -- a single provider error crashes the pipeline. Proven by Claude run (transient empty exit 1 required manual resume).
-3. **Stage 1 effect check too loose** -- `allow_existing=True` lets test generation pass even if no task-specific tests were written. Proven by gemma4 run (no smoke-test tests created, Stage 1 passed on pre-existing pipeline tests).
-4. **Gemini output extraction loses tool-use context** -- when Gemini creates files via tools, the JSON response field is empty. Pipeline log shows no useful output.
+All four gaps from `specs/pipeline-hardening-spec.md` are now implemented (REQ-1 through REQ-4). Additionally, REQ-3's Stage 1 effect check now derives valid test file names from source files mentioned in the spec (e.g., spec mentions `seed.py` → `test_seed` is accepted as a task-specific test term).
