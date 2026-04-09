@@ -1,4 +1,4 @@
-﻿"""Provider adapters for the generalized pipeline."""
+"""Provider adapters for the generalized pipeline."""
 
 from spec_driven_dev_pipeline.providers.base import Provider, ProviderExecution
 

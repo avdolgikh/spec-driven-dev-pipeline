@@ -1,4 +1,4 @@
-﻿"""Run the provider-generalized autonomous pipeline."""
+"""Run the provider-generalized autonomous pipeline."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-﻿"""Shared provider adapter interfaces."""
+"""Shared provider adapter interfaces."""
 
 from __future__ import annotations
 
@@ -33,3 +33,4 @@ class Provider(Protocol):
         schema: dict[str, Any] | None = None,
     ) -> ProviderExecution:
         """Run the requested role and return the final output plus resolved config."""
+        ...

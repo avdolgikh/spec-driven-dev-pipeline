@@ -93,6 +93,18 @@ When re-running the pipeline with a different provider on the same task:
 
 ---
 
+## Local Checks
+
+Run all checks (same as CI):
+```bash
+uv run ruff check .          # lint
+uv run ruff format --check . # format check (drop --check to auto-fix)
+uv run pyright src/           # type check
+uv run pytest                 # tests
+```
+
+---
+
 ## Known Gaps
 
 Tracked in `specs/pipeline-hardening-spec.md`. The four gaps found during the smoke-test validation:

@@ -1,4 +1,4 @@
-﻿"""Claude Code provider adapter."""
+"""Claude Code provider adapter."""
 
 from __future__ import annotations
 

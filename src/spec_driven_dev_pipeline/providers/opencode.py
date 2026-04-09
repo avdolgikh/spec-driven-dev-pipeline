@@ -1,4 +1,4 @@
-﻿"""OpenCode CLI provider adapter (Ollama local models).
+"""OpenCode CLI provider adapter (Ollama local models).
 
 Local models via Ollama cannot use opencode's tool system (no function calling).
 This provider compensates by:

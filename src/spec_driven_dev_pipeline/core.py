@@ -1,4 +1,4 @@
-﻿"""Provider-agnostic orchestration for the agentic TDD pipeline."""
+"""Provider-agnostic orchestration for the agentic TDD pipeline."""
 
 from __future__ import annotations
 
@@ -1166,6 +1166,7 @@ class PipelineRunner:
             for iteration in range(start, self.max_revisions + 1):
                 try:
                     if not self._past(state.stage, "ARTIFACTS_PRODUCED"):
+                        assert artifact_config.training is not None
                         training_checks = self._run_artifact_stage(
                             config=artifact_config.training,
                             stage_label="Stage 6: Produce Artifacts",
@@ -1179,6 +1180,7 @@ class PipelineRunner:
                         state = self._load_state()
 
                     if not self._past(state.stage, "ARTIFACTS_VALIDATED"):
+                        assert artifact_config.evaluation is not None
                         eval_checks = self._run_artifact_stage(
                             config=artifact_config.evaluation,
                             stage_label="Stage 7: Validate Artifacts",
@@ -1205,6 +1207,7 @@ class PipelineRunner:
                                 f"[{status}] {check.label} ({check.actual} vs {check.threshold})"
                             )
 
+                        assert artifact_config.acceptance is not None
                         accepted = evaluate_acceptance(all_checks, artifact_config.acceptance)
                         passed = sum(1 for c in all_checks if c.passed)
                         total = len(all_checks)

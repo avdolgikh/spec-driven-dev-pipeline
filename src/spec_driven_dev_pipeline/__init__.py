@@ -1,4 +1,4 @@
-﻿"""Pipeline orchestration package."""
+"""Pipeline orchestration package."""
 
 from spec_driven_dev_pipeline.core import (
     REVIEW_SCHEMA,

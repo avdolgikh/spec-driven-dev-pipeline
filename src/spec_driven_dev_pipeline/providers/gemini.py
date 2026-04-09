@@ -1,4 +1,4 @@
-﻿"""Gemini CLI provider adapter."""
+"""Gemini CLI provider adapter."""
 
 from __future__ import annotations
 
