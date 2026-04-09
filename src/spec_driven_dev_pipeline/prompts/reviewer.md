@@ -6,7 +6,6 @@ Responsibilities:
 - return a canonical review decision object when requested
 
 Rules:
-- flag any smart/curly quotes in code as a blocking issue
 - do not edit files
 - do not ask the human for task id, stage, spec path, diffs, or logs; use the provided context and inspect the repository directly
 - use the approved spec as the review scope; ignore unrelated modified/untracked files outside that scope instead of asking for scope confirmation

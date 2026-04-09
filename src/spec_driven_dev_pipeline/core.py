@@ -523,8 +523,7 @@ class PipelineRunner:
         self.log_file = self.state_dir / f"{task}.log"
         self.logger = PipelineLogger(self.log_file)
         self.prompts = PromptBuilder(repo_root, self.config)
-        self._tests_snapshot_cache: dict[str, dict[str, str]] = {}
-        self._task_test_terms_cache = self._compute_task_test_terms()
+        self._task_test_terms = self._build_task_test_terms()
 
     def _log_stage_header(self, label: str) -> None:
         self.logger.log("")
@@ -608,16 +607,15 @@ class PipelineRunner:
         return hash_paths(self.repo_root, self.config.hash_targets)
 
     def _tests_hash(self) -> str:
-        digest = hash_paths(self.repo_root, [self.config.tests_dir])
-        self._tests_snapshot_cache[digest] = self._tests_snapshot()
-        return digest
+        return hash_paths(self.repo_root, [self.config.tests_dir])
 
-    def _tests_snapshot(self) -> dict[str, str]:
-        snapshot: dict[str, str] = {}
+    def _tests_file_hashes(self) -> dict[str, str]:
+        """Return {relative_path: sha256} for every file in the tests directory."""
+        result: dict[str, str] = {}
         for path in _iter_hashable_files(self.repo_root, [self.config.tests_dir]):
             relative = path.relative_to(self.repo_root).as_posix()
-            snapshot[relative] = hashlib.sha256(path.read_bytes()).hexdigest()
-        return snapshot
+            result[relative] = hashlib.sha256(path.read_bytes()).hexdigest()
+        return result
 
     def _enforce_reviewer_immutability(self, before_hash: str, stage_label: str) -> None:
         after_hash = self._repo_hash()
@@ -657,30 +655,21 @@ class PipelineRunner:
                 terms.add(f"test_{Path(normalized).stem.lower()}.py")
         return sorted(term for term in terms if term)
 
-    def _compute_task_test_terms(self) -> list[str]:
+    def _build_task_test_terms(self) -> list[str]:
         normalized = self.task.lower()
-        alternatives = {
-            normalized,
-            normalized.replace("-", "_"),
-            normalized.replace("_", "-"),
-        }
-        alternatives.update(part for part in re.split(r"[^a-z0-9]+", normalized) if part)
-        return sorted(term for term in alternatives if term)
+        return sorted({normalized, normalized.replace("-", "_"), normalized.replace("_", "-")})
 
-    def _path_matches_task_terms(self, relative_path: str) -> bool:
-        haystack = relative_path.lower()
-        return any(term in haystack for term in self._task_test_terms_cache)
+    def _is_task_test_file(self, relative_path: str) -> bool:
+        return any(term in relative_path.lower() for term in self._task_test_terms)
 
-    def _task_specific_test_changes(self, before_hash: str, after_hash: str) -> list[str]:
-        before_snapshot = self._tests_snapshot_cache.get(before_hash, {})
-        after_snapshot = self._tests_snapshot_cache.get(after_hash, {})
-        changed: list[str] = []
-        for path, digest in after_snapshot.items():
-            if not self._path_matches_task_terms(path):
-                continue
-            if before_snapshot.get(path) != digest:
-                changed.append(path)
-        return changed
+    def _changed_task_test_files(
+        self, before: dict[str, str], after: dict[str, str]
+    ) -> list[str]:
+        return [
+            path
+            for path, digest in after.items()
+            if self._is_task_test_file(path) and before.get(path) != digest
+        ]
 
     def _artifact_snapshot(self, relative_targets: list[str]) -> str:
         max_total_chars = 3000
@@ -747,48 +736,37 @@ class PipelineRunner:
         execution: ProviderExecution,
         stage_label: str,
         allow_existing: bool = False,
+        before_file_hashes: dict[str, str] | None = None,
     ) -> None:
         after_hash = self._tests_hash()
-        require_task_specific = stage_label == "Stage 1: Test Generation"
-        before_snapshot = self._tests_snapshot_cache.get(before_hash, {})
-        before_task_files = [
-            path for path in before_snapshot if self._path_matches_task_terms(path)
-        ]
-        if require_task_specific:
-            touched = self._task_specific_test_changes(before_hash, after_hash)
-            if touched:
+        tests_dir = self.config.tests_dir
+
+        # Stage 1: require task-specific test files to be created or modified.
+        if stage_label == "Stage 1: Test Generation":
+            before_files = before_file_hashes or {}
+            after_files = self._tests_file_hashes()
+            if self._changed_task_test_files(before_files, after_files):
                 return
+            existing = sorted(p for p in before_files if self._is_task_test_file(p))[:3]
             detail = (
-                " Existing task-specific test files were not modified: "
-                + ", ".join(sorted(before_task_files)[:3])
-                + "."
-                if before_task_files
+                f" Existing task-specific test files were not modified: {', '.join(existing)}."
+                if existing
                 else " No task-specific test files exist yet."
             )
             raise PipelineError(
-                (
-                    f"FAIL: {stage_label} did not modify {self.config.tests_dir}/ "
-                    f"with files for task '{self.task}'.{detail}"
-                ),
+                f"FAIL: {stage_label} did not modify {tests_dir}/ "
+                f"with files for task '{self.task}'.{detail}",
                 EXIT_STAGE_NO_EFFECT,
             )
+
+        # Other stages: any change to tests dir is sufficient.
         if after_hash != before_hash:
             return
-        tests_dir = self.config.tests_dir
-        if (
-            allow_existing
-            and not require_task_specific
-            and any(_iter_hashable_files(self.repo_root, [tests_dir]))
-        ):
+        if allow_existing and any(_iter_hashable_files(self.repo_root, [tests_dir])):
             return
         base_message = f"FAIL: {stage_label} did not modify {tests_dir}/."
-        if stage_label == "Stage 1: Test Generation":
-            raise PipelineError(base_message, EXIT_STAGE_NO_EFFECT)
         if "Revision" in stage_label:
-            raise PipelineError(
-                base_message,
-                EXIT_STAGE_NO_EFFECT,
-            )
+            raise PipelineError(base_message, EXIT_STAGE_NO_EFFECT)
         if _stage_requested_more_input(execution.output):
             raise PipelineError(
                 f"FAIL: {stage_label} did not modify {tests_dir}/ and instead requested more input.",
@@ -817,29 +795,11 @@ class PipelineRunner:
             return result
 
         result = _execute(command)
-        if result.returncode != 0 and self._should_retry_pytest_without_uv(command, result.stderr):
-            fallback = self._uv_fallback_command(command)
-            self.logger.log(
-                "[pytest] uv run failed due to missing project metadata; "
-                "retrying without project context."
-            )
-            result = _execute(fallback)
-
         if result.returncode != 0:
             raise PipelineError(
                 f"FAIL: {label} failed with exit code {result.returncode}.",
                 EXIT_TESTS_BROKE_AFTER_REVISION,
             )
-
-    def _should_retry_pytest_without_uv(self, command: list[str], stderr: str | None) -> bool:
-        if len(command) >= 2 and command[0] == "uv" and command[1] == "run":
-            haystack = (stderr or "").lower()
-            return "project.version" in haystack
-        return False
-
-    def _uv_fallback_command(self, command: list[str]) -> list[str]:
-        remainder = command[2:] or ["python", "-m", "pytest"]
-        return ["uv", "run", "--no-project", "--with", "pytest", *remainder]
 
     def _run_final_pytest_gate(self) -> None:
         try:
@@ -880,8 +840,7 @@ class PipelineRunner:
                     f"[provider] transient failure exit={exc.exit_code}; "
                     f"retrying {retries}/{max_retries}"
                 )
-                if hasattr(time, "sleep"):
-                    time.sleep(2)
+                time.sleep(2)
         self.logger.log(
             f"[provider] provider={execution.provider} role={execution.role} "
             f"tier={execution.tier} model={execution.model}"
@@ -1064,6 +1023,7 @@ class PipelineRunner:
         if not self._past(state.stage, "TESTS_GENERATED"):
             self._log_stage_header("Stage 1: Test Generation")
             before_tests_hash = self._tests_hash()
+            before_file_hashes = self._tests_file_hashes()
             prompt = self.prompts.render(
                 role="test-writer",
                 task=self.task,
@@ -1085,6 +1045,7 @@ class PipelineRunner:
                 execution=execution,
                 stage_label="Stage 1: Test Generation",
                 allow_existing=True,
+                before_file_hashes=before_file_hashes,
             )
             self._save_state("TESTS_GENERATED")
             state = self._load_state()

@@ -11,4 +11,3 @@ Rules:
 - use only the configured test command to run tests
 - create the smallest correct test diff
 - mark integration tests with `@pytest.mark.integration` when required
-- use only plain ASCII quotes (`"`, `'`) in code -- never smart/curly quotes

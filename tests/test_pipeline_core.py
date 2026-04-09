@@ -8,8 +8,8 @@ from types import SimpleNamespace
 
 import pytest
 
-import spec_driven_dev_pipeline.core as pipeline_core
 from spec_driven_dev_pipeline.core import (
+    EXIT_FINAL_TESTS_FAILED,
     EXIT_FROZEN_TESTS_MODIFIED,
     EXIT_INVALID_REVIEW_OUTPUT,
     EXIT_PROVIDER_EXEC_FAILED,
@@ -254,7 +254,7 @@ class RepairingProvider:
         return next(self._outputs)
 
 
-def test_runner_repairs_invalid_reviewer_output_once(tmp_path: Path):
+def test_runner_repairs_invalid_reviewer_output_once(tmp_path: Path, monkeypatch):
     (tmp_path / "specs").mkdir()
     (tmp_path / "prompts").mkdir(parents=True)
     (tmp_path / "tests").mkdir()
@@ -264,10 +264,14 @@ def test_runner_repairs_invalid_reviewer_output_once(tmp_path: Path):
     (tmp_path / "scripts").mkdir()
     (tmp_path / "specs" / "demo-spec.md").write_text("# demo spec", encoding="utf-8")
     (tmp_path / "AGENTS.md").write_text("# repo rules", encoding="utf-8")
-    (tmp_path / "pyproject.toml").write_text("[project]\nname='demo'\n", encoding="utf-8")
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='demo'\nversion='0.0.0'\n", encoding="utf-8")
     (tmp_path / "prompts" / "test_writer.md").write_text("test writer", encoding="utf-8")
     (tmp_path / "prompts" / "implementer.md").write_text("implementer", encoding="utf-8")
     (tmp_path / "prompts" / "reviewer.md").write_text("reviewer", encoding="utf-8")
+    monkeypatch.setattr(
+        "spec_driven_dev_pipeline.core.subprocess.run",
+        lambda *a, **kw: SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
     provider = RepairingProvider()
     runner = PipelineRunner(
         repo_root=tmp_path,
@@ -325,7 +329,7 @@ def test_runner_fails_when_test_generation_requests_more_input_without_writing_t
     (tmp_path / "tests").mkdir()
     (tmp_path / "specs" / "demo-spec.md").write_text("# demo spec", encoding="utf-8")
     (tmp_path / "AGENTS.md").write_text("# repo rules", encoding="utf-8")
-    (tmp_path / "pyproject.toml").write_text("[project]\nname='demo'\n", encoding="utf-8")
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='demo'\nversion='0.0.0'\n", encoding="utf-8")
     (tmp_path / "prompts" / "test_writer.md").write_text("test writer", encoding="utf-8")
     (tmp_path / "prompts" / "implementer.md").write_text("implementer", encoding="utf-8")
     (tmp_path / "prompts" / "reviewer.md").write_text("reviewer", encoding="utf-8")
@@ -358,147 +362,94 @@ def test_runner_fails_when_test_generation_requests_more_input_without_writing_t
     assert "did not modify tests/" in str(exc_info.value)
 
 
-def test_tests_stage_effect_fails_when_no_task_specific_changes(tmp_path: Path):
-    (tmp_path / "specs").mkdir()
+def _make_effect_check_runner(tmp_path: Path, test_files: dict[str, str] | None = None):
+    """Set up a runner and capture before-state for _ensure_tests_stage_effect tests."""
+    (tmp_path / "specs").mkdir(exist_ok=True)
     (tmp_path / "specs" / "demo-spec.md").write_text("# demo spec\n", encoding="utf-8")
     tests_dir = tmp_path / "tests"
-    tests_dir.mkdir()
-    (tests_dir / "test_existing.py").write_text(
-        "def test_existing():\n    assert True\n", encoding="utf-8"
-    )
-
+    tests_dir.mkdir(exist_ok=True)
+    for name, content in (test_files or {}).items():
+        (tests_dir / name).write_text(content, encoding="utf-8")
     runner = PipelineRunner(repo_root=tmp_path, task="demo", provider=DummyProvider())
     before_hash = runner._tests_hash()
-    execution = ProviderExecution(
-        provider="dummy",
-        role="test-writer",
-        tier="economy",
-        model="dummy-model",
-        output="Tests still pending.",
+    before_file_hashes = runner._tests_file_hashes()
+    return runner, before_hash, before_file_hashes
+
+
+def _dummy_execution(output: str = "") -> ProviderExecution:
+    return ProviderExecution(
+        provider="dummy", role="test-writer", tier="economy", model="dummy-model", output=output
     )
 
+
+def _assert_stage1_fails(runner, before_hash, before_file_hashes, output=""):
     with pytest.raises(PipelineError) as exc_info:
         runner._ensure_tests_stage_effect(
             before_hash=before_hash,
-            execution=execution,
+            execution=_dummy_execution(output),
             stage_label="Stage 1: Test Generation",
             allow_existing=True,
+            before_file_hashes=before_file_hashes,
         )
     assert exc_info.value.exit_code == EXIT_STAGE_NO_EFFECT
-    assert "did not modify tests/" in str(exc_info.value)
+    return str(exc_info.value)
+
+
+def test_tests_stage_effect_fails_when_no_task_specific_changes(tmp_path: Path):
+    runner, bh, bfh = _make_effect_check_runner(
+        tmp_path, {"test_existing.py": "def test_existing():\n    assert True\n"}
+    )
+    msg = _assert_stage1_fails(runner, bh, bfh)
+    assert "did not modify tests/" in msg
 
 
 def test_tests_stage_effect_fails_when_task_specific_file_unchanged(tmp_path: Path):
-    (tmp_path / "specs").mkdir()
-    (tmp_path / "specs" / "demo-spec.md").write_text("# demo spec\n", encoding="utf-8")
-    tests_dir = tmp_path / "tests"
-    tests_dir.mkdir()
-    (tests_dir / "test_demo.py").write_text("def test_demo():\n    assert True\n", encoding="utf-8")
-
-    runner = PipelineRunner(repo_root=tmp_path, task="demo", provider=DummyProvider())
-    before_hash = runner._tests_hash()
-    execution = ProviderExecution(
-        provider="dummy",
-        role="test-writer",
-        tier="economy",
-        model="dummy-model",
-        output="Tests already exist.",
+    runner, bh, bfh = _make_effect_check_runner(
+        tmp_path, {"test_demo.py": "def test_demo():\n    assert True\n"}
     )
-
-    with pytest.raises(PipelineError) as exc_info:
-        runner._ensure_tests_stage_effect(
-            before_hash=before_hash,
-            execution=execution,
-            stage_label="Stage 1: Test Generation",
-            allow_existing=True,
-        )
-    assert exc_info.value.exit_code == EXIT_STAGE_NO_EFFECT
-    message = str(exc_info.value)
-    assert "with files for task 'demo'" in message
-    assert "Existing task-specific test files were not modified" in message
+    msg = _assert_stage1_fails(runner, bh, bfh)
+    assert "with files for task 'demo'" in msg
+    assert "Existing task-specific test files were not modified" in msg
 
 
 def test_tests_stage_effect_fails_when_unrelated_test_files_change(tmp_path: Path):
-    (tmp_path / "specs").mkdir()
-    (tmp_path / "specs" / "demo-spec.md").write_text("# demo spec\n", encoding="utf-8")
-    tests_dir = tmp_path / "tests"
-    tests_dir.mkdir()
-    (tests_dir / "test_demo.py").write_text("def test_demo():\n    assert True\n", encoding="utf-8")
-
-    runner = PipelineRunner(repo_root=tmp_path, task="demo", provider=DummyProvider())
-    before_hash = runner._tests_hash()
-    (tests_dir / "test_unrelated.py").write_text(
+    runner, bh, bfh = _make_effect_check_runner(
+        tmp_path, {"test_demo.py": "def test_demo():\n    assert True\n"}
+    )
+    (tmp_path / "tests" / "test_unrelated.py").write_text(
         "def test_unrelated():\n    assert True\n", encoding="utf-8"
     )
-    execution = ProviderExecution(
-        provider="dummy",
-        role="test-writer",
-        tier="economy",
-        model="dummy-model",
-        output="Added unrelated file.",
-    )
-
-    with pytest.raises(PipelineError) as exc_info:
-        runner._ensure_tests_stage_effect(
-            before_hash=before_hash,
-            execution=execution,
-            stage_label="Stage 1: Test Generation",
-            allow_existing=True,
-        )
-    assert exc_info.value.exit_code == EXIT_STAGE_NO_EFFECT
-    assert "did not modify tests/" in str(exc_info.value)
+    msg = _assert_stage1_fails(runner, bh, bfh)
+    assert "did not modify tests/" in msg
 
 
 def test_tests_stage_effect_allows_task_specific_test_change(tmp_path: Path):
-    (tmp_path / "specs").mkdir()
-    (tmp_path / "specs" / "demo-spec.md").write_text("# demo spec\n", encoding="utf-8")
-    tests_dir = tmp_path / "tests"
-    tests_dir.mkdir()
-    test_file = tests_dir / "test_demo.py"
-    test_file.write_text("def test_demo():\n    assert True\n", encoding="utf-8")
-
-    runner = PipelineRunner(repo_root=tmp_path, task="demo", provider=DummyProvider())
-    before_hash = runner._tests_hash()
-    test_file.write_text("def test_demo():\n    assert False\n", encoding="utf-8")
-    execution = ProviderExecution(
-        provider="dummy",
-        role="test-writer",
-        tier="economy",
-        model="dummy-model",
-        output="Updated demo test.",
+    runner, bh, bfh = _make_effect_check_runner(
+        tmp_path, {"test_demo.py": "def test_demo():\n    assert True\n"}
     )
-
+    (tmp_path / "tests" / "test_demo.py").write_text(
+        "def test_demo():\n    assert False\n", encoding="utf-8"
+    )
     runner._ensure_tests_stage_effect(
-        before_hash=before_hash,
-        execution=execution,
+        before_hash=bh,
+        execution=_dummy_execution(),
         stage_label="Stage 1: Test Generation",
         allow_existing=True,
+        before_file_hashes=bfh,
     )
 
 
 def test_tests_stage_effect_allows_new_task_specific_test_file(tmp_path: Path):
-    (tmp_path / "specs").mkdir()
-    (tmp_path / "specs" / "demo-spec.md").write_text("# demo spec\n", encoding="utf-8")
-    tests_dir = tmp_path / "tests"
-    tests_dir.mkdir()
-
-    runner = PipelineRunner(repo_root=tmp_path, task="demo", provider=DummyProvider())
-    before_hash = runner._tests_hash()
-    new_test_file = tests_dir / "test_demo.py"
-    new_test_file.write_text("def test_demo():\n    assert True\n", encoding="utf-8")
-    execution = ProviderExecution(
-        provider="dummy",
-        role="test-writer",
-        tier="economy",
-        model="dummy-model",
-        output="Created demo test.",
+    runner, bh, bfh = _make_effect_check_runner(tmp_path)
+    (tmp_path / "tests" / "test_demo.py").write_text(
+        "def test_demo():\n    assert True\n", encoding="utf-8"
     )
-
     runner._ensure_tests_stage_effect(
-        before_hash=before_hash,
-        execution=execution,
+        before_hash=bh,
+        execution=_dummy_execution(),
         stage_label="Stage 1: Test Generation",
         allow_existing=True,
+        before_file_hashes=bfh,
     )
 
 
@@ -522,7 +473,7 @@ def test_runner_includes_artifact_snapshot_in_initial_review_prompt(tmp_path: Pa
     )
     (tmp_path / "specs" / "demo-spec.md").write_text("# demo spec", encoding="utf-8")
     (tmp_path / "AGENTS.md").write_text("# repo rules", encoding="utf-8")
-    (tmp_path / "pyproject.toml").write_text("[project]\nname='demo'\n", encoding="utf-8")
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='demo'\nversion='0.0.0'\n", encoding="utf-8")
     (tmp_path / "prompts" / "reviewer.md").write_text("reviewer", encoding="utf-8")
 
     class SingleReviewProvider:
@@ -578,7 +529,7 @@ def test_enforce_test_freeze_detects_modified_tests(tmp_path: Path):
 
 def test_enforce_reviewer_immutability_detects_repo_changes(tmp_path: Path):
     (tmp_path / "AGENTS.md").write_text("# repo rules", encoding="utf-8")
-    (tmp_path / "pyproject.toml").write_text("[project]\nname='demo'\n", encoding="utf-8")
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='demo'\nversion='0.0.0'\n", encoding="utf-8")
     scripts_dir = tmp_path / "scripts"
     scripts_dir.mkdir()
     (scripts_dir / "run.sh").write_text("#!/bin/sh\n", encoding="utf-8")
@@ -606,7 +557,7 @@ def test_run_pytest_gate_invokes_uv_run_python_module(tmp_path: Path, monkeypatc
     (tmp_path / "specs").mkdir()
     (tmp_path / "specs" / "demo-spec.md").write_text("# demo spec\n", encoding="utf-8")
     (tmp_path / "AGENTS.md").write_text("# repo rules", encoding="utf-8")
-    (tmp_path / "pyproject.toml").write_text("[project]\nname='demo'\n", encoding="utf-8")
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='demo'\nversion='0.0.0'\n", encoding="utf-8")
     scripts_dir = tmp_path / "scripts"
     scripts_dir.mkdir()
     (scripts_dir / "run.sh").write_text("#!/bin/sh\n", encoding="utf-8")
@@ -637,7 +588,7 @@ def test_run_pytest_gate_fails_on_nonzero_exit(tmp_path: Path, monkeypatch):
     (tmp_path / "specs").mkdir()
     (tmp_path / "specs" / "demo-spec.md").write_text("# demo spec\n", encoding="utf-8")
     (tmp_path / "AGENTS.md").write_text("# repo rules", encoding="utf-8")
-    (tmp_path / "pyproject.toml").write_text("[project]\nname='demo'\n", encoding="utf-8")
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='demo'\nversion='0.0.0'\n", encoding="utf-8")
 
     runner = PipelineRunner(repo_root=tmp_path, task="demo", provider=DummyProvider())
 
@@ -658,10 +609,8 @@ def _runner_for_retry_tests(tmp_path: Path, provider):
     return PipelineRunner(repo_root=tmp_path, task="demo", provider=provider)
 
 
-def _patch_sleep_if_available(monkeypatch):
-    time_module = getattr(pipeline_core, "time", None)
-    if time_module:
-        monkeypatch.setattr(time_module, "sleep", lambda *_: None)
+def _patch_sleep(monkeypatch):
+    monkeypatch.setattr("spec_driven_dev_pipeline.core.time.sleep", lambda *_: None)
 
 
 def test_run_role_retries_once_on_transient_provider_failure(
@@ -669,7 +618,7 @@ def test_run_role_retries_once_on_transient_provider_failure(
 ):
     provider = ConfigurableTransientProvider(failures=1)
     runner = _runner_for_retry_tests(tmp_path, provider)
-    _patch_sleep_if_available(monkeypatch)
+    _patch_sleep(monkeypatch)
 
     execution = runner._run_role(
         role="test-writer",
@@ -689,7 +638,7 @@ def test_run_role_respects_configured_retry_attempts(
     provider = ConfigurableTransientProvider(failures=2)
     runner = _runner_for_retry_tests(tmp_path, provider)
     runner.config.provider_retry_attempts = 2
-    _patch_sleep_if_available(monkeypatch)
+    _patch_sleep(monkeypatch)
 
     execution = runner._run_role(
         role="test-writer",
@@ -706,7 +655,7 @@ def test_run_role_respects_configured_retry_attempts(
 def test_run_role_propagates_after_retry_limit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     provider = ConfigurableTransientProvider(failures=3)
     runner = _runner_for_retry_tests(tmp_path, provider)
-    _patch_sleep_if_available(monkeypatch)
+    _patch_sleep(monkeypatch)
 
     with pytest.raises(PipelineError) as exc_info:
         runner._run_role(
@@ -815,18 +764,16 @@ min_checks_pass: 0
 def test_final_pytest_gate_failure_prevents_verification(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    exit_code = getattr(pipeline_core, "EXIT_FINAL_TESTS_FAILED", None)
-    assert isinstance(exit_code, int)
     runner = _runner_with_code_reviewed_state(tmp_path)
 
     def fake_gate(self, label: str) -> None:  # noqa: ANN401
-        raise PipelineError("final tests failed", exit_code)
+        raise PipelineError("final tests failed", EXIT_FINAL_TESTS_FAILED)
 
     monkeypatch.setattr(PipelineRunner, "_run_pytest_gate", fake_gate)
 
     with pytest.raises(PipelineError) as exc_info:
         runner.run()
-    assert exc_info.value.exit_code == exit_code
+    assert exc_info.value.exit_code == EXIT_FINAL_TESTS_FAILED
     state = json.loads((tmp_path / ".pipeline-state" / "demo.json").read_text(encoding="utf-8"))
     assert state["stage"] == "CODE_REVIEWED"
 
@@ -834,8 +781,6 @@ def test_final_pytest_gate_failure_prevents_verification(
 def test_pipeline_run_raises_final_tests_failed_when_pytest_gate_command_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    exit_code = getattr(pipeline_core, "EXIT_FINAL_TESTS_FAILED", None)
-    assert isinstance(exit_code, int)
     runner = _runner_with_code_reviewed_state(tmp_path)
 
     def fake_run(command, **kwargs):  # noqa: ANN001
@@ -845,7 +790,7 @@ def test_pipeline_run_raises_final_tests_failed_when_pytest_gate_command_fails(
 
     with pytest.raises(PipelineError) as exc_info:
         runner.run()
-    assert exc_info.value.exit_code == exit_code
+    assert exc_info.value.exit_code == EXIT_FINAL_TESTS_FAILED
     state = json.loads((tmp_path / ".pipeline-state" / "demo.json").read_text(encoding="utf-8"))
     assert state["stage"] == "CODE_REVIEWED"
 
