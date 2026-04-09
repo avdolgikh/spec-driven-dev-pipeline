@@ -105,6 +105,13 @@ uv run pytest                 # tests
 
 ---
 
+## Active Work
+
+**Cleanup of Codex's hardening implementation** -- tracked in `specs/hardening-cleanup-plan.md`.
+Codex implemented `pipeline-hardening-spec.md` correctly but with scope creep and noise. Manual cleanup in progress before pipeline runs.
+
+---
+
 ## Known Gaps
 
 Tracked in `specs/pipeline-hardening-spec.md`. The four gaps found during the smoke-test validation:

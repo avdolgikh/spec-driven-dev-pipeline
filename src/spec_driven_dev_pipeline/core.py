@@ -9,6 +9,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import time
 from typing import Any
 
 import yaml
@@ -54,6 +55,7 @@ class PipelineConfig:
     source_dirs: list[str] = field(default_factory=lambda: ["src", "scripts"])
     state_dir: str = ".pipeline-state"
     test_command: list[str] = field(default_factory=lambda: ["uv", "run", "python", "-m", "pytest"])
+    provider_retry_attempts: int = 1
     context_file: str | None = "AGENTS.md"
     hash_targets: list[str] = field(
         default_factory=lambda: ["AGENTS.md", "pyproject.toml", "scripts", "specs", "src", "tests"]
@@ -79,6 +81,7 @@ EXIT_TRAINING_FAILED = 11
 EXIT_EVALUATION_FAILED = 12
 EXIT_ACCEPTANCE_FAILED = 13
 EXIT_ARTIFACT_MISSING = 14
+EXIT_FINAL_TESTS_FAILED = 15
 
 
 class PipelineError(RuntimeError):
@@ -520,6 +523,8 @@ class PipelineRunner:
         self.log_file = self.state_dir / f"{task}.log"
         self.logger = PipelineLogger(self.log_file)
         self.prompts = PromptBuilder(repo_root, self.config)
+        self._tests_snapshot_cache: dict[str, dict[str, str]] = {}
+        self._task_test_terms_cache = self._compute_task_test_terms()
 
     def _log_stage_header(self, label: str) -> None:
         self.logger.log("")
@@ -603,7 +608,16 @@ class PipelineRunner:
         return hash_paths(self.repo_root, self.config.hash_targets)
 
     def _tests_hash(self) -> str:
-        return hash_paths(self.repo_root, [self.config.tests_dir])
+        digest = hash_paths(self.repo_root, [self.config.tests_dir])
+        self._tests_snapshot_cache[digest] = self._tests_snapshot()
+        return digest
+
+    def _tests_snapshot(self) -> dict[str, str]:
+        snapshot: dict[str, str] = {}
+        for path in _iter_hashable_files(self.repo_root, [self.config.tests_dir]):
+            relative = path.relative_to(self.repo_root).as_posix()
+            snapshot[relative] = hashlib.sha256(path.read_bytes()).hexdigest()
+        return snapshot
 
     def _enforce_reviewer_immutability(self, before_hash: str, stage_label: str) -> None:
         after_hash = self._repo_hash()
@@ -642,6 +656,31 @@ class PipelineRunner:
             if normalized.endswith(".py"):
                 terms.add(f"test_{Path(normalized).stem.lower()}.py")
         return sorted(term for term in terms if term)
+
+    def _compute_task_test_terms(self) -> list[str]:
+        normalized = self.task.lower()
+        alternatives = {
+            normalized,
+            normalized.replace("-", "_"),
+            normalized.replace("_", "-"),
+        }
+        alternatives.update(part for part in re.split(r"[^a-z0-9]+", normalized) if part)
+        return sorted(term for term in alternatives if term)
+
+    def _path_matches_task_terms(self, relative_path: str) -> bool:
+        haystack = relative_path.lower()
+        return any(term in haystack for term in self._task_test_terms_cache)
+
+    def _task_specific_test_changes(self, before_hash: str, after_hash: str) -> list[str]:
+        before_snapshot = self._tests_snapshot_cache.get(before_hash, {})
+        after_snapshot = self._tests_snapshot_cache.get(after_hash, {})
+        changed: list[str] = []
+        for path, digest in after_snapshot.items():
+            if not self._path_matches_task_terms(path):
+                continue
+            if before_snapshot.get(path) != digest:
+                changed.append(path)
+        return changed
 
     def _artifact_snapshot(self, relative_targets: list[str]) -> str:
         max_total_chars = 3000
@@ -710,10 +749,37 @@ class PipelineRunner:
         allow_existing: bool = False,
     ) -> None:
         after_hash = self._tests_hash()
+        require_task_specific = stage_label == "Stage 1: Test Generation"
+        before_snapshot = self._tests_snapshot_cache.get(before_hash, {})
+        before_task_files = [
+            path for path in before_snapshot if self._path_matches_task_terms(path)
+        ]
+        if require_task_specific:
+            touched = self._task_specific_test_changes(before_hash, after_hash)
+            if touched:
+                return
+            detail = (
+                " Existing task-specific test files were not modified: "
+                + ", ".join(sorted(before_task_files)[:3])
+                + "."
+                if before_task_files
+                else " No task-specific test files exist yet."
+            )
+            raise PipelineError(
+                (
+                    f"FAIL: {stage_label} did not modify {self.config.tests_dir}/ "
+                    f"with files for task '{self.task}'.{detail}"
+                ),
+                EXIT_STAGE_NO_EFFECT,
+            )
         if after_hash != before_hash:
             return
         tests_dir = self.config.tests_dir
-        if allow_existing and any(_iter_hashable_files(self.repo_root, [tests_dir])):
+        if (
+            allow_existing
+            and not require_task_specific
+            and any(_iter_hashable_files(self.repo_root, [tests_dir]))
+        ):
             return
         base_message = f"FAIL: {stage_label} did not modify {tests_dir}/."
         if stage_label == "Stage 1: Test Generation":
@@ -732,23 +798,56 @@ class PipelineRunner:
     def _run_pytest_gate(self, label: str) -> None:
         self.logger.log("")
         self.logger.log(label)
-        result = subprocess.run(
-            list(self.config.test_command),
-            cwd=self.repo_root,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if result.stdout:
-            for line in result.stdout.rstrip().splitlines():
-                self.logger.log(line)
-        if result.stderr:
-            for line in result.stderr.rstrip().splitlines():
-                self.logger.log(line)
+        command = list(self.config.test_command)
+
+        def _execute(cmd: list[str]) -> subprocess.CompletedProcess[str]:
+            result = subprocess.run(
+                cmd,
+                cwd=self.repo_root,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.stdout:
+                for line in result.stdout.rstrip().splitlines():
+                    self.logger.log(line)
+            if result.stderr:
+                for line in result.stderr.rstrip().splitlines():
+                    self.logger.log(line)
+            return result
+
+        result = _execute(command)
+        if result.returncode != 0 and self._should_retry_pytest_without_uv(command, result.stderr):
+            fallback = self._uv_fallback_command(command)
+            self.logger.log(
+                "[pytest] uv run failed due to missing project metadata; "
+                "retrying without project context."
+            )
+            result = _execute(fallback)
+
         if result.returncode != 0:
             raise PipelineError(
-                "FAIL: tests broke after code revision.", EXIT_TESTS_BROKE_AFTER_REVISION
+                f"FAIL: {label} failed with exit code {result.returncode}.",
+                EXIT_TESTS_BROKE_AFTER_REVISION,
             )
+
+    def _should_retry_pytest_without_uv(self, command: list[str], stderr: str | None) -> bool:
+        if len(command) >= 2 and command[0] == "uv" and command[1] == "run":
+            haystack = (stderr or "").lower()
+            return "project.version" in haystack
+        return False
+
+    def _uv_fallback_command(self, command: list[str]) -> list[str]:
+        remainder = command[2:] or ["python", "-m", "pytest"]
+        return ["uv", "run", "--no-project", "--with", "pytest", *remainder]
+
+    def _run_final_pytest_gate(self) -> None:
+        try:
+            self._run_pytest_gate("Gate: pytest before verification")
+        except PipelineError as exc:
+            if exc.exit_code != EXIT_TESTS_BROKE_AFTER_REVISION:
+                raise
+            raise PipelineError(str(exc), EXIT_FINAL_TESTS_FAILED) from exc
 
     def _run_role(
         self,
@@ -761,13 +860,28 @@ class PipelineRunner:
         self.logger.log(
             f"[provider] launching provider={self.provider.name} role={role} stage={stage_label}"
         )
-        execution = self.provider.run_role(
-            role=role,
-            prompt=prompt,
-            repo_root=self.repo_root,
-            state_dir=self.state_dir,
-            schema=schema,
-        )
+        retries = 0
+        max_retries = max(0, int(self.config.provider_retry_attempts))
+        while True:
+            try:
+                execution = self.provider.run_role(
+                    role=role,
+                    prompt=prompt,
+                    repo_root=self.repo_root,
+                    state_dir=self.state_dir,
+                    schema=schema,
+                )
+                break
+            except PipelineError as exc:
+                if exc.exit_code != EXIT_PROVIDER_EXEC_FAILED or retries >= max_retries:
+                    raise
+                retries += 1
+                self.logger.log(
+                    f"[provider] transient failure exit={exc.exit_code}; "
+                    f"retrying {retries}/{max_retries}"
+                )
+                if hasattr(time, "sleep"):
+                    time.sleep(2)
         self.logger.log(
             f"[provider] provider={execution.provider} role={execution.role} "
             f"tier={execution.tier} model={execution.model}"
@@ -1070,7 +1184,8 @@ class PipelineRunner:
                 stage_name="Stage 4: Validation",
                 stage_instruction=(
                     f"Validate the implementation by running `{' '.join(self.config.test_command)}`. Fix any test failures. "
-                    "Do not modify frozen tests. Do NOT run training scripts â€” training is handled "
+                    "Do not modify frozen tests. "
+                    "Do NOT run training scripts -- training is handled "
                     "by a later pipeline stage. If you need to verify a script's CLI args parse "
                     "correctly, use `--help` only."
                 ),
@@ -1144,7 +1259,10 @@ class PipelineRunner:
                 )
             state = self._load_state()
 
-        # â”€â”€ Stages 6-8: Artifact Pipeline â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        if state.stage == "CODE_REVIEWED":
+            self._run_final_pytest_gate()
+
+        # â"€â"€ Stages 6-8: Artifact Pipeline â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
         spec_text = self.spec_path.read_text(encoding="utf-8-sig")
         artifact_config = parse_artifact_pipeline(spec_text)
 

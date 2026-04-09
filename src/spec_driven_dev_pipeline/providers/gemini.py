@@ -55,9 +55,51 @@ class GeminiProvider:
         """Extract the response text from Gemini CLI JSON output."""
         try:
             data = json.loads(stdout)
-            return data.get("response", "")
         except (json.JSONDecodeError, TypeError):
             return stdout
+
+        response = (data.get("response") or "").strip()
+        if response:
+            return response
+
+        tool_calls = data.get("toolCalls") or data.get("tool_calls") or []
+        summaries: list[str] = []
+        if isinstance(tool_calls, list):
+            for call in tool_calls:
+                if not isinstance(call, dict):
+                    continue
+                name = str(call.get("name", "tool"))
+                parameters = call.get("parameters")
+                result = call.get("result")
+                details: list[str] = []
+
+                if isinstance(parameters, dict):
+                    for key in ("path", "pattern", "file"):
+                        value = parameters.get(key)
+                        if isinstance(value, str) and value.strip():
+                            details.append(value.strip())
+                            break
+                    else:
+                        compact = json.dumps(parameters, ensure_ascii=False)
+                        details.append(self._tail(compact, limit=200))
+                elif parameters not in (None, ""):
+                    details.append(self._tail(str(parameters), limit=200))
+
+                if isinstance(result, (dict, list)):
+                    details.append(self._tail(json.dumps(result, ensure_ascii=False), limit=200))
+                elif result not in (None, ""):
+                    details.append(self._tail(str(result), limit=200))
+
+                if details:
+                    summaries.append(f"{name}: " + " -> ".join(details))
+                else:
+                    summaries.append(f"{name}: completed")
+
+        if summaries:
+            joined = "\n".join(f"- {line}" for line in summaries)
+            return f"Tool activity:\n{joined}"
+
+        return stdout
 
     def run_role(
         self,

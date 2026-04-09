@@ -1,5 +1,6 @@
 """Unit tests for provider adapter command construction."""
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -8,6 +9,7 @@ import pytest
 from spec_driven_dev_pipeline.core import PipelineError
 from spec_driven_dev_pipeline.providers.claude import ClaudeProvider
 from spec_driven_dev_pipeline.providers.codex import CodexProvider
+from spec_driven_dev_pipeline.providers.gemini import GeminiProvider
 
 
 def test_claude_provider_builds_schema_command():
@@ -138,3 +140,48 @@ def test_provider_role_tiers_are_explicit():
     assert claude.role_configs["reviewer"].tier == "premium"
     assert codex.role_configs["implementer"].tier == "economy"
     assert codex.role_configs["reviewer"].tier == "premium"
+
+
+def test_gemini_extract_response_prefers_response_field():
+    provider = GeminiProvider()
+    payload = json.dumps(
+        {
+            "response": "final text",
+            "toolCalls": [
+                {
+                    "name": "write_file",
+                    "parameters": {"path": "tests/test_sample.py"},
+                    "result": "done",
+                }
+            ],
+        }
+    )
+
+    assert provider._extract_response(payload) == "final text"
+
+
+def test_gemini_extract_response_includes_tool_call_summary():
+    provider = GeminiProvider()
+    payload = json.dumps(
+        {
+            "response": "",
+            "toolCalls": [
+                {
+                    "name": "write_file",
+                    "parameters": {"path": "tests/test_sample.py"},
+                    "result": "created file",
+                },
+                {
+                    "name": "glob",
+                    "parameters": {"pattern": "tests/*.py"},
+                    "result": ["tests/test_sample.py"],
+                },
+            ],
+        }
+    )
+
+    summary = provider._extract_response(payload)
+
+    assert summary
+    assert "write_file" in summary
+    assert "tests/test_sample.py" in summary

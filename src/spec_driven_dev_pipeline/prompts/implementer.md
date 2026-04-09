@@ -11,3 +11,4 @@ Rules:
 - use only the configured test command to run tests
 - prefer the smallest correct diff
 - if blocked, explain the blocker precisely instead of guessing
+- use only plain ASCII quotes (`"`, `'`) in code -- never smart/curly quotes
