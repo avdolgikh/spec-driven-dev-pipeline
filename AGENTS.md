@@ -41,6 +41,18 @@ Every significant decision, convention, or discovery must be documented immediat
 - Minimal dependencies.
 - Prefer the smallest correct diff.
 
+### Rule #8: Testable Architecture in Specs
+- Logic must live in **importable library modules** under `src/`, not in scripts.
+- Scripts (`scripts/`) are **thin CLI wrappers**: argparse + call library functions.
+- Specs must list library module functions with signatures in the Package Layout section.
+- This ensures tests can import and exercise functions directly, without subprocess hacks or AST parsing.
+
+---
+
+## Spec Template
+
+See `specs/TEMPLATE.md`. All new specs must follow this structure (Rule #8: testable architecture).
+
 ---
 
 ## Tech Stack
@@ -107,10 +119,32 @@ uv run pytest                 # tests
 
 ## Active Work
 
-None. Hardening cleanup complete (see `specs/hardening-cleanup-plan.md`).
+### Local Model Benchmarking (2026-04-10) — DONE
+
+Full report: `benchmarks/benchmark-calc-report.md`
+
+- **Task:** `specs/benchmark-calc-spec.md` (expression evaluator, 4 functions, 10 ACs)
+- **Framework:** `specs/benchmark-framework-spec.md` (runner, judge, metrics, leaderboard)
+- **Result:** All 4 local models failed early. GLM-4.7-Flash best at 1.8/5. Structured output (FILE: blocks) is the main bottleneck.
+- **Artifacts:** `benchmarks/results/`, `benchmarks/leaderboard.md`, `benchmarks/leaderboard.json`
+
+### Improving Local Model Scores (2026-04-10)
+
+**Specs ready:**
+- `specs/format-repair-spec.md` — Post-processing repair layer: converts markdown fences, tool-call JSON, and filename comments into `FILE:` blocks before parsing.
+- `specs/few-shot-prompts-spec.md` — Role-specific few-shot examples appended to OpenCode prompts so models see the exact expected output format.
+
+**Future improvements (no spec yet):**
+- **Relaxed filename matching** — Accept `calc_test.py` in addition to `test_calc.py`. Qwen 3.5 produced correct format but wrong naming. Low effort, high impact for that failure mode.
+- **Smaller task granularity** — Split benchmark tasks into sub-tasks (e.g., tokenizer-only, parser-only). 4 functions + 10 ACs in one shot may exceed small model capacity.
+- **Ollama grammar constraints** — Use GBNF grammars to force `FILE:` block structure at the generation level. Guarantees format compliance but requires Ollama API integration (not CLI).
 
 ---
 
 ## Known Gaps
 
 All four gaps from `specs/pipeline-hardening-spec.md` are now implemented (REQ-1 through REQ-4). Additionally, REQ-3's Stage 1 effect check now derives valid test file names from source files mentioned in the spec (e.g., spec mentions `seed.py` → `test_seed` is accepted as a task-specific test term).
+
+### Gemini Retry Pending
+
+Gemini smoke-test stopped at `CODE_VALIDATED` due to 429 quota. State saved — resumable when quota frees up.

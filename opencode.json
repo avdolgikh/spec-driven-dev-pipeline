@@ -7,7 +7,9 @@
       "options": { "baseURL": "http://localhost:11434/v1" },
       "models": {
         "gemma4:e4b": { "name": "Gemma 4 E4B" },
-        "qwen3.5:latest": { "name": "Qwen 3.5 9.7B" }
+        "qwen3.5:latest": { "name": "Qwen 3.5 9.7B" },
+        "glm-4.7-flash:latest": { "name": "GLM 4.7 Flash 30B MoE" },
+        "qwen3-coder:latest": { "name": "Qwen3 Coder 30B MoE" }
       }
     }
   }

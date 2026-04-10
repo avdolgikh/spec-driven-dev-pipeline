@@ -98,6 +98,34 @@ GEMINI_MODEL_ECONOMY, GEMINI_MODEL_PREMIUM
 - **Scope enforcement** -- agents receive only the approved spec; they cannot
   expand scope beyond it
 
+## Benchmarking
+
+The repo includes a framework for benchmarking local models against the
+pipeline. Pick a task spec, run multiple models, judge the results with a
+cloud provider, and generate a leaderboard.
+
+```bash
+# Run all models through the pipeline
+uv run python scripts/run_benchmark.py model1:tag model2:tag \
+  --task benchmark-calc --output-dir benchmarks/results
+
+# Judge each model's output (uses a cloud provider as evaluator)
+uv run python scripts/judge_benchmark.py benchmarks/results \
+  --provider codex --spec specs/benchmark-calc-spec.md --all
+
+# Generate leaderboard
+uv run python scripts/generate_leaderboard.py
+```
+
+Results land in `benchmarks/`:
+
+- `results/<model>/` -- pipeline logs, generated code, metrics, judge scores
+- `leaderboard.md` / `leaderboard.json` -- ranked comparison
+- `benchmark-calc-report.md` -- first benchmark report (4 local Ollama models)
+
+See `specs/benchmark-framework-spec.md` for the framework design and
+`specs/benchmark-calc-spec.md` for the benchmark task.
+
 ## File Layout
 
 ```
@@ -112,4 +140,14 @@ src/spec_driven_dev_pipeline/
     test_writer.md     # Test-writer role prompt
     implementer.md     # Implementer role prompt
     reviewer.md        # Reviewer role prompt
+  benchmark/
+    runner.py          # Model runner, cleanup, artifact collection
+    judge.py           # Judge prompt builder, response parser
+    metrics.py         # Log/pytest parsing, metric collection
+    leaderboard.py     # Markdown/JSON leaderboard rendering
+scripts/
+  run_pipeline.py      # Pipeline CLI
+  run_benchmark.py     # Benchmark runner CLI
+  judge_benchmark.py   # Judge evaluation CLI
+  generate_leaderboard.py  # Leaderboard generation CLI
 ```

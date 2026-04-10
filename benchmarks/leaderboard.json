@@ -1,0 +1,156 @@
+{
+  "metadata": {
+    "task": "benchmark-calc",
+    "date": "2026-04-10",
+    "hardware": "RTX 4070 12GB / Ollama",
+    "judge": "codex (gpt-5.1-codex)",
+    "models": [
+      {
+        "model": "gemma4-e4b",
+        "sanitized_tag": "gemma4-e4b",
+        "result_dir": "benchmarks\\results\\gemma4-e4b",
+        "exit_code": 10
+      },
+      {
+        "model": "glm-4.7-flash-latest",
+        "sanitized_tag": "glm-4.7-flash-latest",
+        "result_dir": "benchmarks\\results\\glm-4.7-flash-latest",
+        "exit_code": 10
+      },
+      {
+        "model": "qwen3-coder-latest",
+        "sanitized_tag": "qwen3-coder-latest",
+        "result_dir": "benchmarks\\results\\qwen3-coder-latest",
+        "exit_code": 10
+      },
+      {
+        "model": "qwen3.5-latest",
+        "sanitized_tag": "qwen3.5-latest",
+        "result_dir": "benchmarks\\results\\qwen3.5-latest",
+        "exit_code": 10
+      }
+    ]
+  },
+  "entries": [
+    {
+      "model": "glm-4.7-flash-latest",
+      "sanitized_tag": "glm-4.7-flash-latest",
+      "composite_score": 1.8,
+      "metrics": {
+        "final_stage": "TESTS_GENERATED",
+        "revision_cycles": 1,
+        "format_parse_failures": 0,
+        "test_pass_count": 0,
+        "test_fail_count": 0,
+        "test_pass_rate": 0.0,
+        "pipeline_completed": false,
+        "exit_code": 10,
+        "wall_clock_seconds": 1371.448827199998,
+        "files_generated": 1
+      },
+      "judge": {
+        "model": "ollama/glm-4.7-flash:latest",
+        "task": "benchmark-calc",
+        "scores": {
+          "test_coverage": 2,
+          "test_quality": 2,
+          "code_correctness": 1,
+          "code_quality": 1,
+          "format_compliance": 3
+        },
+        "notes": "Tests cover basic arithmetic/precedence/paren/div-zero but miss many ACs (unary minus, several invalid inputs, unmatched parens, complex expressions). Some tests are weak or non-assertive (e.g., test_parse_binop only checks list, parse precedence uses nested conditionals without failing on wrong shape). Float precision test uses exact 0.3 which is brittle. No implementation produced, so correctness/quality are failing. Output had a valid FILE block for tests but revision output wasn\u2019t in FILE format and no implementation/JSON beyond reviewer response.",
+        "composite_score": 1.8
+      }
+    },
+    {
+      "model": "qwen3.5-latest",
+      "sanitized_tag": "qwen3.5-latest",
+      "composite_score": 1.2,
+      "metrics": {
+        "final_stage": "UNKNOWN",
+        "revision_cycles": 0,
+        "format_parse_failures": 0,
+        "test_pass_count": 0,
+        "test_fail_count": 0,
+        "test_pass_rate": 0.0,
+        "pipeline_completed": false,
+        "exit_code": 10,
+        "wall_clock_seconds": 103.85186640000029,
+        "files_generated": 0
+      },
+      "judge": {
+        "model": "ollama/qwen3.5:latest",
+        "task": "benchmark-calc",
+        "scores": {
+          "test_coverage": 1,
+          "test_quality": 1,
+          "code_correctness": 1,
+          "code_quality": 1,
+          "format_compliance": 2
+        },
+        "notes": "Stage 1 failed: output included a FILE block for tests/calc_test.py (wrong naming for task-specific detection) but mixed extensive prose and a second, incomplete test dump with undefined CalcExpressionError. No test files were actually written into the results directory and no implementation was produced, so tests cannot be executed and code correctness/quality cannot be demonstrated.",
+        "composite_score": 1.2
+      }
+    },
+    {
+      "model": "gemma4-e4b",
+      "sanitized_tag": "gemma4-e4b",
+      "composite_score": 1.0,
+      "metrics": {
+        "final_stage": "UNKNOWN",
+        "revision_cycles": 0,
+        "format_parse_failures": 0,
+        "test_pass_count": 0,
+        "test_fail_count": 0,
+        "test_pass_rate": 0.0,
+        "pipeline_completed": false,
+        "exit_code": 10,
+        "wall_clock_seconds": 21.31473879999976,
+        "files_generated": 0
+      },
+      "judge": {
+        "model": "ollama/gemma4:e4b",
+        "task": "benchmark-calc",
+        "scores": {
+          "test_coverage": 1,
+          "test_quality": 1,
+          "code_correctness": 1,
+          "code_quality": 1,
+          "format_compliance": 1
+        },
+        "notes": "Stage 1 failed: no task-specific test files written. Output was prose, no FILE blocks. Tests targeted wrong module/path and used placeholder mocks/NotImplementedError bypasses, so they would not validate spec. Error expectations use ValueError instead of CalcError. No implementation provided, so correctness and code quality cannot be demonstrated.",
+        "composite_score": 1.0
+      }
+    },
+    {
+      "model": "qwen3-coder-latest",
+      "sanitized_tag": "qwen3-coder-latest",
+      "composite_score": 1.0,
+      "metrics": {
+        "final_stage": "UNKNOWN",
+        "revision_cycles": 0,
+        "format_parse_failures": 0,
+        "test_pass_count": 0,
+        "test_fail_count": 0,
+        "test_pass_rate": 0.0,
+        "pipeline_completed": false,
+        "exit_code": 10,
+        "wall_clock_seconds": 36.07320509999772,
+        "files_generated": 0
+      },
+      "judge": {
+        "model": "qwen3-coder-latest",
+        "task": "benchmark-calc",
+        "scores": {
+          "test_coverage": 1,
+          "test_quality": 1,
+          "code_correctness": 1,
+          "code_quality": 1,
+          "format_compliance": 1
+        },
+        "notes": "Stage 1 failed with no task-specific test files created; no implementation was produced. Output included an unsupported tool call and no FILE blocks, so nothing was parseable or runnable.",
+        "composite_score": 1.0
+      }
+    }
+  ]
+}
