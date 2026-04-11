@@ -126,6 +126,27 @@ Results land in `benchmarks/`:
 See `specs/benchmark-framework-spec.md` for the framework design and
 `specs/benchmark-calc-spec.md` for the benchmark task.
 
+### Local Ollama Models (2026-04-10)
+
+Four models were tested on an RTX 4070 12GB via Ollama. None completed the
+full pipeline -- all failed at or near Stage 1 (test generation).
+
+| Model | Size | Best Stage | Score | Time |
+|-------|------|-----------|-------|------|
+| GLM-4.7-Flash | MoE 30B/3B active | TESTS_GENERATED | 1.8/5 | 23m |
+| Qwen 3.5 | Dense 4B | Stage 1 fail | 1.2/5 | 2m |
+| Gemma 4 | Dense ~9B | Stage 1 fail | 1.0/5 | 21s |
+| Qwen3-Coder | MoE 30B/3.3B active | Stage 1 fail | 1.0/5 | 36s |
+
+The main bottleneck is **structured output**: the pipeline requires `FILE:`
+blocks, and 3 of 4 models couldn't produce them (prose markdown, tool-call
+JSON, or wrong filenames instead). GLM-4.7-Flash was the only model to
+produce parseable test files but couldn't sustain format compliance across
+revisions.
+
+Full report:
+`benchmarks/benchmark-calc-report.md`.
+
 ## File Layout
 
 ```

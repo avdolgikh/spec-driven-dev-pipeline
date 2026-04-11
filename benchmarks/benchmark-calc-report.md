@@ -85,7 +85,6 @@ Scores are 1 (poor) to 5 (excellent). Composite = mean of all 5 dimensions.
 
 ## Run Details
 
-- **Ollama storage:** `D:\dev\ollama-models` (env `OLLAMA_MODELS`)
 - **Provider:** OpenCode CLI via `opencode.json` Ollama adapter
 - **Models registered in:** `opencode.json` under `provider.ollama.models`
 - **Pipeline command:** `uv run python scripts/run_pipeline.py benchmark-calc --provider opencode`
