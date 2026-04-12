@@ -178,6 +178,13 @@ class PipelineLogger:
             handle.write("\n")
 
 
+def _describe_validation_suite(config: "PipelineConfig") -> str:
+    """Human-readable validation suite string for agent prompts and logs."""
+    if config.validation_commands:
+        return " && ".join(" ".join(cmd) for cmd in config.validation_commands)
+    return " ".join(config.test_command)
+
+
 class PromptBuilder:
     """Renders shared role prompts with stage-specific context."""
 
@@ -218,7 +225,7 @@ class PromptBuilder:
             "- This pipeline is non-interactive. Do not ask the human for more input; use the embedded spec/context and inspect the repository directly.",
             f"- Tests directory: `{self.config.tests_dir}/`",
             f"- Source directories: {', '.join(f'`{d}/`' for d in self.config.source_dirs)}",
-            f"- Test command: `{' '.join(self.config.test_command)}`",
+            f"- Validation suite: `{_describe_validation_suite(self.config)}`",
         ]
         if self.config.context_file:
             sections.append(f"- Repo rules path: {self.config.context_file}")
@@ -810,10 +817,17 @@ class PipelineRunner:
                 EXIT_STAGE_NO_EFFECT,
             )
 
+    def _validation_description(self) -> str:
+        return _describe_validation_suite(self.config)
+
     def _run_pytest_gate(self, label: str) -> None:
         self.logger.log("")
         self.logger.log(label)
-        command = list(self.config.test_command)
+        commands: list[list[str]]
+        if self.config.validation_commands:
+            commands = [list(cmd) for cmd in self.config.validation_commands]
+        else:
+            commands = [list(self.config.test_command)]
 
         def _execute(cmd: list[str]) -> subprocess.CompletedProcess[str]:
             result = subprocess.run(
@@ -831,12 +845,15 @@ class PipelineRunner:
                     self.logger.log(line)
             return result
 
-        result = _execute(command)
-        if result.returncode != 0:
-            raise PipelineError(
-                f"FAIL: {label} failed with exit code {result.returncode}.",
-                EXIT_TESTS_BROKE_AFTER_REVISION,
-            )
+        for cmd in commands:
+            self.logger.log(f"[validation] $ {' '.join(cmd)}")
+            result = _execute(cmd)
+            if result.returncode != 0:
+                raise PipelineError(
+                    f"FAIL: {label} failed with exit code {result.returncode} "
+                    f"(command: {' '.join(cmd)}).",
+                    EXIT_TESTS_BROKE_AFTER_REVISION,
+                )
 
     def _run_final_pytest_gate(self) -> None:
         try:
@@ -971,7 +988,7 @@ class PipelineRunner:
                 "The artifact pipeline failed. Diagnose the issue and fix the production code "
                 "or training/evaluation scripts to resolve the error below. "
                 "Do not modify frozen tests. "
-                f"Run `{' '.join(self.config.test_command)}` after your fix to ensure tests still pass.\n\n"
+                f"Run the full validation suite `{_describe_validation_suite(self.config)}` after your fix to ensure it passes.\n\n"
                 "## Error Details\n\n"
                 f"{error_context}"
             ),
@@ -1068,7 +1085,7 @@ class PipelineRunner:
                 stage_name="Stage 1: Test Generation",
                 stage_instruction=(
                     f"Read the approved spec{f' and {self.config.context_file}' if self.config.context_file else ''}. Write tests for this task covering all "
-                    f"acceptance criteria in {self.config.tests_dir}/. Confirm the tests are red with `{' '.join(self.config.test_command)}`. "
+                    f"acceptance criteria in {self.config.tests_dir}/. Confirm the tests are red with `{_describe_validation_suite(self.config)}`. "
                     "Do not write production code."
                 ),
             )
@@ -1129,7 +1146,7 @@ class PipelineRunner:
                     stage_name="Stage 2b: Test Revision",
                     stage_instruction=(
                         "Revise the test suite to address the reviewer blocking feedback. "
-                        f"Do not touch production code. Re-run `{' '.join(self.config.test_command)}` after revisions."
+                        f"Do not touch production code. Re-run `{_describe_validation_suite(self.config)}` after revisions."
                     ),
                     iteration=iteration,
                     reviewer_feedback=decision.blocking,
@@ -1161,7 +1178,7 @@ class PipelineRunner:
                 stage_instruction=(
                     "Read the approved spec and frozen tests. Implement the minimal production code "
                     "needed to make the tests pass. Do not modify frozen tests. Run "
-                    f"`{' '.join(self.config.test_command)}` to verify."
+                    f"`{_describe_validation_suite(self.config)}` to verify."
                 ),
             )
             self._run_role(
@@ -1181,7 +1198,7 @@ class PipelineRunner:
                 spec_path=self.spec_path,
                 stage_name="Stage 4: Validation",
                 stage_instruction=(
-                    f"Validate the implementation by running `{' '.join(self.config.test_command)}`. Fix any test failures. "
+                    f"Validate the implementation by running `{_describe_validation_suite(self.config)}`. Fix any test failures. "
                     "Do not modify frozen tests. "
                     "Do NOT run training scripts -- training is handled "
                     "by a later pipeline stage. If you need to verify a script's CLI args parse "
@@ -1209,7 +1226,7 @@ class PipelineRunner:
                     stage_name="Stage 5: Code Review",
                     stage_instruction=(
                         "Review only the implementation and frozen tests relevant to the approved spec for this task. Ignore unrelated workspace changes outside the spec scope. "
-                        f"Observe test status with `{' '.join(self.config.test_command)}` and return only the "
+                        f"Observe test status with `{_describe_validation_suite(self.config)}` and return only the "
                         "canonical review decision JSON."
                     ),
                     iteration=iteration,
@@ -1238,7 +1255,7 @@ class PipelineRunner:
                     stage_name="Stage 5b: Code Revision",
                     stage_instruction=(
                         "Revise the implementation to address the reviewer blocking feedback. "
-                        f"Do not modify frozen tests. Re-run `{' '.join(self.config.test_command)}` after revisions."
+                        f"Do not modify frozen tests. Re-run `{_describe_validation_suite(self.config)}` after revisions."
                     ),
                     iteration=iteration,
                     reviewer_feedback=decision.blocking,

@@ -638,6 +638,56 @@ def test_run_pytest_gate_fails_on_nonzero_exit(tmp_path: Path, monkeypatch):
     assert exc_info.value.exit_code == EXIT_TESTS_BROKE_AFTER_REVISION
 
 
+def test_run_pytest_gate_runs_validation_commands_in_order_and_stops_on_failure(
+    tmp_path: Path, monkeypatch
+):
+    (tmp_path / "specs").mkdir()
+    (tmp_path / "specs" / "demo-spec.md").write_text("# demo spec\n", encoding="utf-8")
+    (tmp_path / "AGENTS.md").write_text("# repo rules", encoding="utf-8")
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname='demo'\nversion='0.0.0'\n", encoding="utf-8"
+    )
+
+    config = PipelineConfig(
+        validation_commands=[
+            ["echo", "lint"],
+            ["echo", "typecheck"],
+            ["echo", "test"],
+        ],
+    )
+    runner = PipelineRunner(
+        repo_root=tmp_path, task="demo", provider=DummyProvider(), config=config
+    )
+
+    calls: list[list[str]] = []
+
+    def fake_run(command, **kwargs):  # noqa: ANN001
+        calls.append(list(command))
+        # Fail on the second command to prove ordering + early-exit
+        rc = 1 if command == ["echo", "typecheck"] else 0
+        return SimpleNamespace(returncode=rc, stdout="", stderr="")
+
+    monkeypatch.setattr("spec_driven_dev_pipeline.core.subprocess.run", fake_run)
+
+    with pytest.raises(PipelineError) as exc_info:
+        runner._run_pytest_gate("Gate: validation")
+    assert exc_info.value.exit_code == EXIT_TESTS_BROKE_AFTER_REVISION
+    assert calls == [["echo", "lint"], ["echo", "typecheck"]]
+    assert "echo typecheck" in str(exc_info.value)
+
+
+def test_validation_description_joins_commands_with_and(tmp_path: Path):
+    (tmp_path / "specs").mkdir()
+    (tmp_path / "specs" / "demo-spec.md").write_text("# demo spec\n", encoding="utf-8")
+    config = PipelineConfig(
+        validation_commands=[["uv", "run", "ruff", "check"], ["uv", "run", "pytest"]]
+    )
+    runner = PipelineRunner(
+        repo_root=tmp_path, task="demo", provider=DummyProvider(), config=config
+    )
+    assert runner._validation_description() == "uv run ruff check && uv run pytest"
+
+
 def _runner_for_retry_tests(tmp_path: Path, provider):
     specs_dir = tmp_path / "specs"
     specs_dir.mkdir()

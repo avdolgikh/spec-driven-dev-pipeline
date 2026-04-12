@@ -150,6 +150,21 @@ All four gaps from `specs/pipeline-hardening-spec.md` are now implemented (REQ-1
 - `_enforce_reviewer_immutability` hashed the full `hash_targets` list (`AGENTS.md`, `pyproject.toml`, `scripts`, `specs`, `src`, `tests`) and surfaced a generic error that blamed the reviewer. Host-side edits to any of those paths during a reviewer stage tripped the guard with no diagnostic detail — observed with the `multi-agent` project on 2026-04-12 (orchestration-code-analysis, Stage 2 iter 2; reproduced again at iter 3 after a host edit to `specs/observability-phase1-spec.md`).
 - **Fix (2026-04-12):** `_repo_file_hashes()` now snapshots per-file hashes; `_enforce_reviewer_immutability` compares before/after dicts and the failure message lists `added`/`removed`/`modified` paths and notes that concurrent host edits are the most common cause. Call sites in Stage 2 and Stage 5 updated; existing test extended to assert the changed path is reported. 32/32 pipeline tests pass.
 
+### Configurable validation suite (2026-04-12) — ADDED
+
+- **Motivation:** `test_command` only ran pytest. Agents could produce code that passed tests but failed `ruff`/`pyright` on CI (observed twice on `multi-agent` after push). Per user directive, the pipeline agent must enforce the same checks CI runs.
+- **Change:** `PipelineConfig.validation_commands: list[list[str]] | None` added. When set, `_run_pytest_gate` iterates each command in order and fails on the first non-zero exit; otherwise falls back to `test_command` for backward compat. Prompt/log strings use the new helper `_describe_validation_suite(config)` (renders as `"cmd_a && cmd_b && ..."`).
+- **Usage:** consumers pass `--config <path.toml>` to `scripts/run_pipeline.py`. Example TOML:
+  ```toml
+  validation_commands = [
+      ["uv", "run", "ruff", "check", "src/", "tests/"],
+      ["uv", "run", "ruff", "format", "--check", "src/", "tests/"],
+      ["uv", "run", "pyright", "src/"],
+      ["uv", "run", "python", "-m", "pytest"],
+  ]
+  ```
+- **Coverage:** two new tests in `test_pipeline_core.py` (order + early-exit; description formatting). 101/101 pipeline tests pass. Ruff/format/pyright clean.
+
 ### Gemini Retry Pending
 
 Gemini smoke-test stopped at `CODE_VALIDATED` due to 429 quota. State saved — resumable when quota frees up.
