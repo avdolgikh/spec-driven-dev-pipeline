@@ -55,6 +55,7 @@ class PipelineConfig:
     source_dirs: list[str] = field(default_factory=lambda: ["src", "scripts"])
     state_dir: str = ".pipeline-state"
     test_command: list[str] = field(default_factory=lambda: ["uv", "run", "python", "-m", "pytest"])
+    validation_commands: list[list[str]] | None = None
     provider_retry_attempts: int = 1
     context_file: str | None = "AGENTS.md"
     hash_targets: list[str] = field(
@@ -617,13 +618,41 @@ class PipelineRunner:
             result[relative] = hashlib.sha256(path.read_bytes()).hexdigest()
         return result
 
-    def _enforce_reviewer_immutability(self, before_hash: str, stage_label: str) -> None:
-        after_hash = self._repo_hash()
-        if before_hash != after_hash:
-            raise PipelineError(
-                f"FAIL: reviewer stage modified repository files during {stage_label}.",
-                EXIT_REVIEWER_MODIFIED_FILES,
-            )
+    def _repo_file_hashes(self) -> dict[str, str]:
+        """Return {relative_path: sha256} for every file under hash_targets."""
+        result: dict[str, str] = {}
+        for path in _iter_hashable_files(self.repo_root, self.config.hash_targets):
+            relative = path.relative_to(self.repo_root).as_posix()
+            result[relative] = hashlib.sha256(path.read_bytes()).hexdigest()
+        return result
+
+    def _enforce_reviewer_immutability(
+        self, before_file_hashes: dict[str, str], stage_label: str
+    ) -> None:
+        after_file_hashes = self._repo_file_hashes()
+        if before_file_hashes == after_file_hashes:
+            return
+        before_keys = set(before_file_hashes)
+        after_keys = set(after_file_hashes)
+        added = sorted(after_keys - before_keys)
+        removed = sorted(before_keys - after_keys)
+        modified = sorted(
+            p for p in (before_keys & after_keys) if before_file_hashes[p] != after_file_hashes[p]
+        )
+        changes: list[str] = []
+        for label, paths in (("added", added), ("removed", removed), ("modified", modified)):
+            for p in paths:
+                changes.append(f"  {label}: {p}")
+        detail = "\n".join(changes) if changes else "  (no specific paths identified)"
+        raise PipelineError(
+            f"FAIL: reviewer stage modified repository files during {stage_label}.\n"
+            f"Changed paths:\n{detail}\n"
+            "Note: this guard trips on any change under hash_targets during the stage, "
+            "including concurrent host-side edits. If you were editing files while the "
+            "pipeline was running, that is the likely cause; otherwise the reviewer "
+            "agent ignored its 'no edits' instruction.",
+            EXIT_REVIEWER_MODIFIED_FILES,
+        )
 
     def _enforce_test_freeze(self, frozen_tests_hash: str | None) -> None:
         if not frozen_tests_hash:
@@ -865,7 +894,7 @@ class PipelineRunner:
         *,
         prompt: str,
         stage_label: str,
-        before_hash: str,
+        before_file_hashes: dict[str, str],
     ) -> ReviewDecision:
         if "Test Review" in stage_label:
             review_targets = [self.config.tests_dir]
@@ -884,7 +913,7 @@ class PipelineRunner:
             schema=REVIEW_SCHEMA,
             stage_label=stage_label,
         )
-        self._enforce_reviewer_immutability(before_hash, stage_label)
+        self._enforce_reviewer_immutability(before_file_hashes, stage_label)
         try:
             decision = normalize_review_output(execution.output)
             if _review_requests_missing_inputs(decision):
@@ -914,7 +943,7 @@ class PipelineRunner:
                 schema=REVIEW_SCHEMA,
                 stage_label=f"{stage_label} Output Repair",
             )
-            self._enforce_reviewer_immutability(before_hash, f"{stage_label} Output Repair")
+            self._enforce_reviewer_immutability(before_file_hashes, f"{stage_label} Output Repair")
             decision = normalize_review_output(repair_execution.output)
             if _review_requests_missing_inputs(decision):
                 raise PipelineError(
@@ -1062,7 +1091,7 @@ class PipelineRunner:
             start = self._start_iteration(state, "TESTS_GENERATED")
             for iteration in range(start, self.max_revisions + 1):
                 self._log_stage_header(f"Stage 2: Test Review (iter {iteration})")
-                before_hash = self._repo_hash()
+                before_file_hashes = self._repo_file_hashes()
                 prompt = self.prompts.render(
                     role="reviewer",
                     task=self.task,
@@ -1077,7 +1106,7 @@ class PipelineRunner:
                 decision = self._run_review_role(
                     prompt=prompt,
                     stage_label="Stage 2: Test Review",
-                    before_hash=before_hash,
+                    before_file_hashes=before_file_hashes,
                 )
                 if decision.fallback_used:
                     self.logger.log("[review] fallback normalization path used")
@@ -1172,7 +1201,7 @@ class PipelineRunner:
             start = self._start_iteration(state, "CODE_VALIDATED")
             for iteration in range(start, self.max_revisions + 1):
                 self._log_stage_header(f"Stage 5: Code Review (iter {iteration})")
-                before_hash = self._repo_hash()
+                before_file_hashes = self._repo_file_hashes()
                 prompt = self.prompts.render(
                     role="reviewer",
                     task=self.task,
@@ -1188,7 +1217,7 @@ class PipelineRunner:
                 decision = self._run_review_role(
                     prompt=prompt,
                     stage_label="Stage 5: Code Review",
-                    before_hash=before_hash,
+                    before_file_hashes=before_file_hashes,
                 )
                 if decision.fallback_used:
                     self.logger.log("[review] fallback normalization path used")

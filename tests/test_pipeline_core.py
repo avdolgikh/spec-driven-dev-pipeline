@@ -530,7 +530,7 @@ def test_runner_includes_artifact_snapshot_in_initial_review_prompt(tmp_path: Pa
     decision = runner._run_review_role(
         prompt="Base review prompt",
         stage_label="Stage 2: Test Review",
-        before_hash=runner._repo_hash(),
+        before_file_hashes=runner._repo_file_hashes(),
     )
     assert decision.decision == "approve"
     assert "## Artifact Snapshot" in provider.prompt
@@ -575,12 +575,14 @@ def test_enforce_reviewer_immutability_detects_repo_changes(tmp_path: Path):
     spec_path.write_text("# demo spec\n", encoding="utf-8")
 
     runner = PipelineRunner(repo_root=tmp_path, task="demo", provider=DummyProvider())
-    before_hash = runner._repo_hash()
+    before_file_hashes = runner._repo_file_hashes()
     spec_path.write_text("# demo spec updated\n", encoding="utf-8")
 
     with pytest.raises(PipelineError) as exc_info:
-        runner._enforce_reviewer_immutability(before_hash, "Stage 5: Code Review")
+        runner._enforce_reviewer_immutability(before_file_hashes, "Stage 5: Code Review")
     assert exc_info.value.exit_code == EXIT_REVIEWER_MODIFIED_FILES
+    assert "specs/demo-spec.md" in str(exc_info.value)
+    assert "modified:" in str(exc_info.value)
 
 
 def test_run_pytest_gate_invokes_uv_run_python_module(tmp_path: Path, monkeypatch):

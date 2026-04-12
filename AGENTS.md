@@ -145,6 +145,11 @@ Full report: `benchmarks/benchmark-calc-report.md`
 
 All four gaps from `specs/pipeline-hardening-spec.md` are now implemented (REQ-1 through REQ-4). Additionally, REQ-3's Stage 1 effect check now derives valid test file names from source files mentioned in the spec (e.g., spec mentions `seed.py` → `test_seed` is accepted as a task-specific test term).
 
+### Misleading `EXIT_REVIEWER_MODIFIED_FILES` on concurrent host edits (2026-04-12) — FIXED
+
+- `_enforce_reviewer_immutability` hashed the full `hash_targets` list (`AGENTS.md`, `pyproject.toml`, `scripts`, `specs`, `src`, `tests`) and surfaced a generic error that blamed the reviewer. Host-side edits to any of those paths during a reviewer stage tripped the guard with no diagnostic detail — observed with the `multi-agent` project on 2026-04-12 (orchestration-code-analysis, Stage 2 iter 2; reproduced again at iter 3 after a host edit to `specs/observability-phase1-spec.md`).
+- **Fix (2026-04-12):** `_repo_file_hashes()` now snapshots per-file hashes; `_enforce_reviewer_immutability` compares before/after dicts and the failure message lists `added`/`removed`/`modified` paths and notes that concurrent host edits are the most common cause. Call sites in Stage 2 and Stage 5 updated; existing test extended to assert the changed path is reported. 32/32 pipeline tests pass.
+
 ### Gemini Retry Pending
 
 Gemini smoke-test stopped at `CODE_VALIDATED` due to 429 quota. State saved — resumable when quota frees up.
