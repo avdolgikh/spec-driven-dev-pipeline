@@ -91,7 +91,7 @@ opencode.json                     # opencode CLI config (registers Ollama provid
 
 ### Provider-Specific Notes
 
-- **Codex**: Models `gpt-5.1-codex-mini` (test-writer/implementer), `gpt-5.1-codex` (implementer), `gpt-5.2-codex` (reviewer). Uses `--ephemeral --skip-git-repo-check` and stdin for prompts.
+- **Codex**: Models `gpt-5.4-mini` (test-writer), `gpt-5.3-codex` (implementer), `gpt-5.4` (reviewer). ChatGPT-account Codex CLI rejects `gpt-5`, `gpt-5-codex`, `gpt-5.1-*`, `gpt-5.2-*`, `gpt-5.3`, `gpt-5.4-codex` ("not supported when using Codex with a ChatGPT account"). Override via `CODEX_MODEL_TEST_WRITER` / `CODEX_MODEL_IMPLEMENTER` / `CODEX_MODEL_REVIEWER`. Uses `--ephemeral --skip-git-repo-check` and stdin for prompts.
 - **Gemini**: Uses `-o json` output. `_extract_response` parses JSON for tool-using models. Quota is per-model; flash and pro have separate limits.
 - **OpenCode**: Requires `opencode.json` in repo root to register Ollama as a custom provider. Without it, `ollama/` model prefix is not recognized. Local models need >30B parameters to reliably follow structured output formats.
 - **Claude**: Uses `--permission-mode bypassPermissions`. Strips `CLAUDECODE` env var to avoid recursion.

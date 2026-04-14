@@ -17,7 +17,7 @@ from . import metrics
 
 PIPELINE_SCRIPT = ["uv", "run", "python", "scripts/run_pipeline.py"]
 DEFAULT_HARDWARE = "RTX 4070 12GB / Ollama"
-DEFAULT_JUDGE = "codex (gpt-5.1-codex)"
+DEFAULT_JUDGE = "codex (gpt-5.3-codex)"
 
 
 def sanitize_model_tag(tag: str) -> str:

@@ -345,7 +345,7 @@ def test_run_judge_truncates_pipeline_log_tail(tmp_path: Path, monkeypatch) -> N
             provider="codex",
             role=role,
             tier="test",
-            model="gpt-5.1-codex",
+            model="gpt-5.3-codex",
             output=json.dumps(
                 {
                     "model": "glm-4.7-flash:latest",
@@ -443,7 +443,7 @@ def test_run_judge_builds_prompt_invokes_provider_and_writes_evaluation(
             provider="codex",
             role=role,
             tier="test",
-            model="gpt-5.1-codex",
+            model="gpt-5.3-codex",
             output=json.dumps(
                 {
                     "model": model_tag,
@@ -590,7 +590,7 @@ def test_render_markdown_orders_entries_by_composite_score() -> None:
         "task": "benchmark-calc",
         "date": "2026-04-10",
         "hardware": "RTX 4070 12GB / Ollama",
-        "judge": "codex (gpt-5.1-codex)",
+        "judge": "codex (gpt-5.3-codex)",
     }
     rendered = leaderboard.render_markdown(entries, metadata)
     assert "# Local Model Benchmark Leaderboard" in rendered
@@ -628,7 +628,7 @@ def test_load_results_merges_summary_metrics_and_judges(tmp_path: Path) -> None:
         "task": "benchmark-calc",
         "date": "2026-04-10",
         "hardware": "RTX 4070 12GB / Ollama",
-        "judge": "codex (gpt-5.1-codex)",
+        "judge": "codex (gpt-5.3-codex)",
         "models": [
             {"model": "glm-4.7-flash:latest", "sanitized_tag": "glm-4.7-flash-latest"},
             {"model": "qwen3.5:latest", "sanitized_tag": "qwen3.5-latest"},
@@ -661,7 +661,7 @@ def test_generate_leaderboard_writes_markdown_and_json_outputs(tmp_path: Path) -
         "task": "benchmark-calc",
         "date": "2026-04-10",
         "hardware": "RTX 4070 12GB / Ollama",
-        "judge": "codex (gpt-5.1-codex)",
+        "judge": "codex (gpt-5.3-codex)",
         "models": [
             {"model": "glm-4.7-flash:latest", "sanitized_tag": "glm-4.7-flash-latest"},
             {"model": "qwen3.5:latest", "sanitized_tag": "qwen3.5-latest"},

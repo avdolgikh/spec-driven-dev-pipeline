@@ -36,11 +36,11 @@ def test_codex_provider_uses_windows_cmd_shim(tmp_path: Path):
     assert command[0].endswith("codex.cmd")
     assert command[1] == "exec"
     assert "--model" in command
-    assert "gpt-5.1-codex" in command
+    assert "gpt-5.3-codex" in command
     assert "--output-schema" in command
     assert "--ephemeral" in command
     assert "--skip-git-repo-check" in command
-    assert command[command.index("--model") + 1] == "gpt-5.1-codex"
+    assert command[command.index("--model") + 1] == "gpt-5.3-codex"
     assert command[command.index("--output-schema") + 1].endswith("schema.json")
     assert command[command.index("--sandbox") + 1] == "danger-full-access"
     assert command[-1] == "-"
@@ -60,9 +60,9 @@ def test_codex_reviewer_uses_danger_full_access_with_immutability_guard(tmp_path
 
 def test_codex_provider_default_role_models_are_explicit():
     provider = CodexProvider()
-    assert provider.role_configs["test-writer"].model == "gpt-5.1-codex-mini"
-    assert provider.role_configs["implementer"].model == "gpt-5.1-codex"
-    assert provider.role_configs["reviewer"].model == "gpt-5.2-codex"
+    assert provider.role_configs["test-writer"].model == "gpt-5.4-mini"
+    assert provider.role_configs["implementer"].model == "gpt-5.3-codex"
+    assert provider.role_configs["reviewer"].model == "gpt-5.4"
 
 
 def test_codex_provider_reads_last_message_from_workspace_scratch(tmp_path: Path, monkeypatch):

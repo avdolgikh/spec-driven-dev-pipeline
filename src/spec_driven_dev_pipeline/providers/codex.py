@@ -33,15 +33,15 @@ class CodexProvider:
         self.role_configs = {
             "test-writer": RoleConfig(
                 tier="economy",
-                model=os.getenv("CODEX_MODEL_TEST_WRITER", "gpt-5.1-codex-mini"),
+                model=os.getenv("CODEX_MODEL_TEST_WRITER", "gpt-5.4-mini"),
             ),
             "implementer": RoleConfig(
                 tier="economy",
-                model=os.getenv("CODEX_MODEL_IMPLEMENTER", "gpt-5.1-codex"),
+                model=os.getenv("CODEX_MODEL_IMPLEMENTER", "gpt-5.3-codex"),
             ),
             "reviewer": RoleConfig(
                 tier="premium",
-                model=os.getenv("CODEX_MODEL_REVIEWER", "gpt-5.2-codex"),
+                model=os.getenv("CODEX_MODEL_REVIEWER", "gpt-5.4"),
             ),
         }
         self.executable = Path(os.getenv("APPDATA", "")) / "npm" / "codex.cmd"
