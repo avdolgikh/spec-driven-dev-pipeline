@@ -131,6 +131,7 @@ Full report: `benchmarks/benchmark-calc-report.md`
 ### Improving Local Model Scores (2026-04-10)
 
 **Specs ready:**
+- `specs/pipeline-improvement-plan-spec.md` — Infrastructure hardening: direct SDK adapters, GBNF grammar constraints for local models, OpenTelemetry tracing, and a Rich-based TUI.
 - `specs/format-repair-spec.md` — Post-processing repair layer: converts markdown fences, tool-call JSON, and filename comments into `FILE:` blocks before parsing.
 - `specs/few-shot-prompts-spec.md` — Role-specific few-shot examples appended to OpenCode prompts so models see the exact expected output format.
 
