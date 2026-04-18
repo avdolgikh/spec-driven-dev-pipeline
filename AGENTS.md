@@ -119,6 +119,10 @@ uv run pytest                 # tests
 
 ## Active Work
 
+### NEXT STEP: Pipeline Hardening (2026-04-18)
+- **Primary Spec:** `specs/pipeline-improvement-plan-spec.md`
+- **Goal:** Move to SDK-based providers, implement GBNF grammars for local models, and add OpenTelemetry/Rich observability.
+
 ### Local Model Benchmarking (2026-04-10) — DONE
 
 Full report: `benchmarks/benchmark-calc-report.md`
