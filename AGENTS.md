@@ -47,6 +47,13 @@ Every significant decision, convention, or discovery must be documented immediat
 - Specs must list library module functions with signatures in the Package Layout section.
 - This ensures tests can import and exercise functions directly, without subprocess hacks or AST parsing.
 
+### Rule #9: Specs Are High-Level Intent, Not Pseudo-Code
+- Target ~150 lines for a spec. If it looks like pseudo-code, it is too detailed.
+- DO specify: Goal, Scope, REQ prose, observable ACs, Package Layout hints, Source Files.
+- DO NOT specify: exact class signatures, full method signatures, attribute names, span name strings, event topic strings, enum values, per-test assertions, Return-on-Failure tables, detailed span-tree diagrams.
+- Rationale: the pipeline's value is autonomous generation by test-writer + implementer. Over-specified specs (a) do the agents' design work, (b) create ambiguity vectors at every pinned string (literal vs enum vs symbolic reference), (c) bloat the spec until reviewers nitpick micro-details instead of meaning.
+- Evidence: over-detailed spec (580 lines, Public Contracts + Test Matrix with assertions + span tree with literal names) burned 3 pipeline runs on `hybrid-foundation` (2026-04-18) before being slimmed back. The minimal M1 template successfully shipped 4 prior specs.
+
 ---
 
 ## Spec Template

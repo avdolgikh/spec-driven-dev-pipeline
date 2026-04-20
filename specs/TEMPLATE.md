@@ -1,5 +1,23 @@
 # Spec: <Title>
 
+> **Spec Philosophy (MANDATORY).** Specs are high-level intent + observable ACs,
+> NOT pseudo-code. Target ~150 lines. If the spec can be copy-pasted into code,
+> it is too detailed.
+>
+> **DO NOT include in a spec:** exact class signatures, full method signatures,
+> attribute names on returned objects, exact span name strings, exact event
+> topic strings, enum literal values, per-test assertions (counts, field-by-field
+> equality), "Public Contracts" blocks, "Return-on-Failure" tables, detailed
+> span-tree diagrams.
+>
+> **Why:** (1) the pipeline's value is autonomous generation — over-specification
+> does the agents' design work. (2) Every pinned string becomes an ambiguity
+> vector (literal vs enum vs symbolic reference). (3) Bloated specs cause
+> reviewers to nitpick micro-details instead of verifying meaning.
+>
+> Leave room for the test-writer and implementer to pick names, shapes, and
+> exact error types. Their job is design; your job is intent.
+
 ## Status
 
 Draft | Approved

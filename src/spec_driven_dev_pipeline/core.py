@@ -211,8 +211,10 @@ class PromptBuilder:
         stage_instruction: str,
         iteration: int = 0,
         reviewer_feedback: list[str] | None = None,
+        prior_feedback: list[str] | None = None,
     ) -> str:
         feedback = reviewer_feedback or []
+        prior = prior_feedback or []
         spec_text = spec_path.read_text(encoding="utf-8-sig").strip()
         sections = [
             self.role_prompt(role),
@@ -232,6 +234,13 @@ class PromptBuilder:
         if feedback:
             sections.extend(["- Reviewer blocking feedback to address:"])
             sections.extend([f"  - {item}" for item in feedback])
+        if prior:
+            sections.extend(
+                [
+                    "- Previously raised in earlier iterations (ensure your revision still addresses these; do not weaken or drop assertions added to satisfy them):"
+                ]
+            )
+            sections.extend([f"  - {item}" for item in prior])
         sections.extend(
             [
                 "",
@@ -701,7 +710,12 @@ class PipelineRunner:
             return sorted(terms)
         for raw in re.findall(r"`([^`\n]+)`", spec_text):
             cleaned = raw.strip().lower()
-            if cleaned.endswith(".py") and not Path(cleaned).name.startswith("test_"):
+            if not cleaned.endswith(".py"):
+                continue
+            name = Path(cleaned).name
+            if name.startswith("test_"):
+                terms.add(Path(cleaned).stem)
+            else:
                 terms.add(f"test_{Path(cleaned).stem}")
         return sorted(term for term in terms if term)
 
@@ -1106,6 +1120,7 @@ class PipelineRunner:
 
         if not self._past(state.stage, "TESTS_FROZEN"):
             start = self._start_iteration(state, "TESTS_GENERATED")
+            cumulative_test_blocking: list[str] = []
             for iteration in range(start, self.max_revisions + 1):
                 self._log_stage_header(f"Stage 2: Test Review (iter {iteration})")
                 before_file_hashes = self._repo_file_hashes()
@@ -1139,6 +1154,10 @@ class PipelineRunner:
                     )
                 self._log_stage_header(f"Stage 2b: Test Revision (iter {iteration})")
                 before_tests_hash = self._tests_hash()
+                prior_test_blocking = list(cumulative_test_blocking)
+                cumulative_test_blocking.extend(
+                    item for item in decision.blocking if item not in cumulative_test_blocking
+                )
                 revise_prompt = self.prompts.render(
                     role="test-writer",
                     task=self.task,
@@ -1150,6 +1169,7 @@ class PipelineRunner:
                     ),
                     iteration=iteration,
                     reviewer_feedback=decision.blocking,
+                    prior_feedback=prior_test_blocking,
                 )
                 execution = self._run_role(
                     role="test-writer",
@@ -1216,6 +1236,7 @@ class PipelineRunner:
 
         if not self._past(state.stage, "CODE_REVIEWED"):
             start = self._start_iteration(state, "CODE_VALIDATED")
+            cumulative_code_blocking: list[str] = []
             for iteration in range(start, self.max_revisions + 1):
                 self._log_stage_header(f"Stage 5: Code Review (iter {iteration})")
                 before_file_hashes = self._repo_file_hashes()
@@ -1248,6 +1269,10 @@ class PipelineRunner:
                         EXIT_CODE_REVISION_CAP,
                     )
                 self._log_stage_header(f"Stage 5b: Code Revision (iter {iteration})")
+                prior_code_blocking = list(cumulative_code_blocking)
+                cumulative_code_blocking.extend(
+                    item for item in decision.blocking if item not in cumulative_code_blocking
+                )
                 revise_prompt = self.prompts.render(
                     role="implementer",
                     task=self.task,
@@ -1259,6 +1284,7 @@ class PipelineRunner:
                     ),
                     iteration=iteration,
                     reviewer_feedback=decision.blocking,
+                    prior_feedback=prior_code_blocking,
                 )
                 self._run_role(
                     role="implementer",

@@ -11,3 +11,17 @@ Rules:
 - use only the configured test command to run tests
 - create the smallest correct test diff
 - mark integration tests with `@pytest.mark.integration` when required
+
+Test design principles:
+
+TDD discipline. The implementation does not exist yet. Do not assume method names, class hierarchies, or private attributes. When a test needs a seam, express it as setup-driving-behavior ("configure X so that calling the public entry point produces Y") rather than structural pinning ("the class must expose method A").
+
+Test observable behavior, not internal shape. Prefer exercising the system through its public entry points and checking externally visible outcomes (events emitted, state observed, outputs produced). Avoid asserting on:
+- private attributes or underscored internals
+- exact method names the spec does not name
+- subclass relationships the spec does not require
+- exact span attribute keys or event topic strings the spec does not name
+
+No assertions beyond the spec. Every assertion must trace back to a REQ or AC clause. If the spec does not commit to a specific structure, do not test for it. A compliant implementation that satisfies the spec's intent must pass — even if structured differently from what you would write.
+
+When in doubt, write fewer, stronger behavioral tests rather than many narrow structural ones.
