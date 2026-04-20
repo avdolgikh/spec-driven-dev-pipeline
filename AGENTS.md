@@ -126,9 +126,18 @@ uv run pytest                 # tests
 
 ## Active Work
 
-### NEXT STEP: Pipeline Hardening (2026-04-18)
-- **Primary Spec:** `specs/pipeline-improvement-plan-spec.md`
-- **Goal:** Move to SDK-based providers, implement GBNF grammars for local models, and add OpenTelemetry/Rich observability.
+### NEXT STEP: Pipeline Improvements — 2026-04-20
+
+The bundled `pipeline-improvement-plan-spec.md` was reviewed against its critique (`pipeline-improvement-plan-critique.md`) and superseded by a ruthlessly-split plan. The industry-review PDFs in `docs/` (gpt, gemini) were filtered through the same pain-first lens; most enterprise patterns were rejected as out of scope for a single-user public tool.
+
+- **Master plan:** `specs/pipeline-improvements-2026apr-plan.md`
+- **Tier 1 specs (ship in order):**
+  1. `specs/paths-shutil-which-spec.md` — portable executable discovery (~1 day, mechanical). Replaces hardcoded `APPDATA/npm/*.cmd` in providers with a `shutil.which`-based resolver; unblocks Linux/macOS.
+  2. `specs/clarify-stage-spec.md` — new Stage 0 that surfaces spec ambiguities before test-writing. Structural fix for the 6c-class oscillation failure mode (test-writer silently pins under-specified shapes → reviewer objects → cap-exit). Advisory-first rollout; `off` mode preserves current behavior.
+  3. `specs/otel-tracing-spec.md` — OTel spans around existing stage seams, export via standard `OTEL_*` env vars; no-op when unset. Pays back on every future cap-exit post-mortem.
+- **Tier 2 (parking lot, not yet specced):** optional YAML frontmatter on specs, then per-role model routing. Only after all three Tier 1 slices ship green.
+- **Tier 3 (explicitly rejected this cycle):** SDK provider adapters, GBNF grammar enforcement, Rich TUI dashboard, MCP tool manifests, permission tiers, worktree-based CIV parallelism, skeleton repos, `gh skill` portability, DORA / PR-acceptance dashboards. Rationale lives in the master plan's "Tier 3" section and in the critique.
+- **Execution model — "AI builds AI":** Slice 1 (`paths-shutil-which-spec.md`) is the first pipeline improvement implemented *through the pipeline itself*, using Codex as the provider. First time the tool builds on its own source. Specs stay intent-level per Rule #9; test-writer and implementer own the design.
 
 ### Local Model Benchmarking (2026-04-10) — DONE
 
@@ -142,7 +151,7 @@ Full report: `benchmarks/benchmark-calc-report.md`
 ### Improving Local Model Scores (2026-04-10)
 
 **Specs ready:**
-- `specs/pipeline-improvement-plan-spec.md` — Infrastructure hardening: direct SDK adapters, GBNF grammar constraints for local models, OpenTelemetry tracing, and a Rich-based TUI.
+- `specs/pipeline-improvement-plan-spec.md` — Infrastructure hardening: direct SDK adapters, GBNF grammar constraints for local models, OpenTelemetry tracing, and a Rich-based TUI. **SUPERSEDED 2026-04-20** by the split plan (`specs/pipeline-improvements-2026apr-plan.md`); see `specs/pipeline-improvement-plan-critique.md` for rationale.
 - `specs/format-repair-spec.md` — Post-processing repair layer: converts markdown fences, tool-call JSON, and filename comments into `FILE:` blocks before parsing.
 - `specs/few-shot-prompts-spec.md` — Role-specific few-shot examples appended to OpenCode prompts so models see the exact expected output format.
 
@@ -180,3 +189,23 @@ All four gaps from `specs/pipeline-hardening-spec.md` are now implemented (REQ-1
 ### Gemini Retry Pending
 
 Gemini smoke-test stopped at `CODE_VALIDATED` due to 429 quota. State saved — resumable when quota frees up.
+
+### Test-writer helpers now constrained (2026-04-20) — ADDED
+
+- **Motivation:** consumer project (multi-agent `hybrid-foundation-orchestrator`) cap-exited with all-over-pin blockers even though direct `assert` lines were behavioral. Root cause: test helpers (`_build_orchestrator`, `_find_validator_class`, etc.) used `inspect.signature` kwarg enumeration, class-name substring scanning, and "exactly-N-fields" model acceptance — structural pins dressed as "detection logic". The existing "test observable behavior, not internal shape" principle only governed assertions, not helpers.
+- **Change:** `src/spec_driven_dev_pipeline/prompts/test_writer.md` gained a new principle "Helpers and fixtures are assertions too" that forbids:
+  - `inspect.signature` / kwarg-layout enumeration / preset accepted-parameter lists
+  - class-name or attribute-name substring matching to "discover" the target
+  - "exactly N fields" restrictions on a model
+  - requiring the implementer to expose an EXTRA public API (transition callable, hook, setter) just to make a scenario exercisable
+  - final guidance: "If you cannot construct the scenario through behavior alone, the spec gap is the problem — flag it, don't invent a structural workaround."
+
+### Reviewer acknowledges minimum-necessary pinning (2026-04-20) — ADDED
+
+- **Motivation:** after the test-writer prompt fix above, `hybrid-foundation-orchestrator` still cap-exited. Root cause was reviewer miscalibration: the reviewer was flagging any constructor-signature or entry-method commitment as over-constraint, even though a test against a spec-named class necessarily commits to *some* shape. The test-writer was in an impossible position — "don't enumerate alternatives" + "don't pin any single shape" has no solution.
+- **Change:** `src/spec_driven_dev_pipeline/prompts/reviewer.md` gained a new principle "Minimum-necessary pinning is not over-constraining" that treats the following as acceptable, NOT blockers:
+  - constructing a spec-named class with required injected collaborators under one chosen keyword/positional layout
+  - calling one public entry-point method (e.g. `run`)
+  - passing a spec-named dependency under a specific parameter name
+- **Line the reviewer must enforce:** one committed shape per construction/entry surface is fine; enumerated alternatives, substring-scanning, "exactly N fields", or mandated EXTRA public APIs are blockers. Also added: "Under-specified spec surfaces" rule — if a REQ implies a public class but the spec does not name the signature, tests necessarily commit to something; that commitment is not a blocker. Spec feedback belongs at the spec stage, not in test-suite blockers.
+- **Both prompt changes are uncommitted in this repo.** When the user commits next, both prompt fixes should go in together.
