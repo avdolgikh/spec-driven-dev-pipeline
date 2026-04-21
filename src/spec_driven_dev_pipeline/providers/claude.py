@@ -11,6 +11,7 @@ from typing import Any
 
 from spec_driven_dev_pipeline.core import EXIT_PROVIDER_EXEC_FAILED, PipelineError
 from spec_driven_dev_pipeline.providers.base import ProviderExecution
+from spec_driven_dev_pipeline.utils import executables as _executables
 
 
 @dataclass(frozen=True)
@@ -26,20 +27,26 @@ class ClaudeProvider:
     _permission_mode = "bypassPermissions"
 
     def __init__(self) -> None:
+        economy_model = os.getenv("CLAUDE_MODEL_ECONOMY", "sonnet")
         self.role_configs = {
+            "clarify": RoleConfig(
+                tier="economy",
+                model=os.getenv("CLAUDE_MODEL_CLARIFY", economy_model),
+            ),
             "test-writer": RoleConfig(
                 tier="economy",
-                model=os.getenv("CLAUDE_MODEL_ECONOMY", "sonnet"),
+                model=economy_model,
             ),
             "implementer": RoleConfig(
                 tier="economy",
-                model=os.getenv("CLAUDE_MODEL_ECONOMY", "sonnet"),
+                model=economy_model,
             ),
             "reviewer": RoleConfig(
                 tier="premium",
                 model=os.getenv("CLAUDE_MODEL_PREMIUM", "opus"),
             ),
         }
+        self.executable: str | Path | None = None
 
     def _command(
         self,
@@ -47,10 +54,11 @@ class ClaudeProvider:
         role: str,
         prompt: str,
         schema: dict[str, Any] | None,
+        executable: str = "claude",
     ) -> list[str]:
         config = self.role_configs[role]
         command = [
-            "claude",
+            executable,
             "-p",
             prompt,
             "--model",
@@ -78,11 +86,17 @@ class ClaudeProvider:
         state_dir: Path,
         schema: dict[str, Any] | None = None,
     ) -> ProviderExecution:
+        resolved_executable = _executables.resolve_executable(self.name, override=self.executable)
         config = self.role_configs[role]
         env = os.environ.copy()
         env.pop("CLAUDECODE", None)
         result = subprocess.run(
-            self._command(role=role, prompt=prompt, schema=schema),
+            self._command(
+                role=role,
+                prompt=prompt,
+                schema=schema,
+                executable=resolved_executable,
+            ),
             cwd=repo_root,
             capture_output=True,
             text=True,

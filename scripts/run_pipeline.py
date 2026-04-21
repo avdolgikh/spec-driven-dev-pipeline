@@ -50,6 +50,12 @@ def parse_args() -> argparse.Namespace:
         default=4,
         help="Maximum revision attempts per review loop.",
     )
+    parser.add_argument(
+        "--clarify-mode",
+        choices=["off", "advisory", "blocking"],
+        default=None,
+        help="Clarify stage mode override. CLI value takes precedence over config.",
+    )
     return parser.parse_args()
 
 
@@ -59,6 +65,9 @@ def main() -> int:
         args.repo_root.resolve() if args.repo_root else Path(__file__).resolve().parent.parent
     )
     config = load_config(args.config) if args.config else PipelineConfig()
+    clarify_mode = getattr(args, "clarify_mode", None)
+    if clarify_mode is not None:
+        config.clarify_mode = clarify_mode
     providers = {
         "claude": ClaudeProvider,
         "codex": CodexProvider,

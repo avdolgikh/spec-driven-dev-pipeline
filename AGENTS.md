@@ -54,6 +54,17 @@ Every significant decision, convention, or discovery must be documented immediat
 - Rationale: the pipeline's value is autonomous generation by test-writer + implementer. Over-specified specs (a) do the agents' design work, (b) create ambiguity vectors at every pinned string (literal vs enum vs symbolic reference), (c) bloat the spec until reviewers nitpick micro-details instead of meaning.
 - Evidence: over-detailed spec (580 lines, Public Contracts + Test Matrix with assertions + span tree with literal names) burned 3 pipeline runs on `hybrid-foundation` (2026-04-18) before being slimmed back. The minimal M1 template successfully shipped 4 prior specs.
 
+### Rule #10: Wrapping Up — Skip Red Tests For Unfinished Slices Before Pushing
+- TDD produces naturally-red test suites while an implementation is in-flight. A push with red tests breaks CI for everyone.
+- Before `git push`: run `uv run ruff check . && uv run ruff format --check . && uv run pyright src/ && uv run pytest`. Any red must be resolved.
+- If the red is a frozen test file whose implementation slice is not yet landed, skip the **whole file** with a file-level `pytestmark = pytest.mark.skip(reason="Slice <id> (<slice-name>) implementation pending; remove this skip when <target module> lands. See AGENTS.md Known Gaps.")`.
+  - Place `pytestmark` **after** all imports (otherwise ruff E402 fires).
+  - Never edit individual assertions or delete tests to make CI green — the test contract is frozen, and patching it defeats the reviewer's approval.
+  - The skip is a temporary CI-green measure, not a test rewrite. The implementation slice unskips by deleting the `pytestmark` block in the same commit that lands the impl.
+- If the red is a formatting / lint / typecheck regression, fix it directly — never skip lint.
+- Pattern applies equally to `ruff format --check` failures on files touched by an in-flight slice: run `uv run ruff format <file>` before pushing.
+- When skipping a file, add a one-line Known-Gaps entry so the skip is discoverable from AGENTS.md, not only from the test file itself.
+
 ---
 
 ## Spec Template
@@ -166,6 +177,10 @@ Full report: `benchmarks/benchmark-calc-report.md`
 
 All four gaps from `specs/pipeline-hardening-spec.md` are now implemented (REQ-1 through REQ-4). Additionally, REQ-3's Stage 1 effect check now derives valid test file names from source files mentioned in the spec (e.g., spec mentions `seed.py` → `test_seed` is accepted as a task-specific test term).
 
+### `tests/test_pipeline_tracing_wiring.py` skipped pending Slice 3b impl (2026-04-21) — TEMPORARY
+
+- File-level `pytestmark = pytest.mark.skip(...)` added under Rule #10 to keep CI green. Test contract is frozen (654 lines, 3× reviewer-passed in Slice 3b attempt 2). Unskip by deleting the `pytestmark` block in the same commit that lands the `core.py` tracing wiring.
+
 ### Misleading `EXIT_REVIEWER_MODIFIED_FILES` on concurrent host edits (2026-04-12) — FIXED
 
 - `_enforce_reviewer_immutability` hashed the full `hash_targets` list (`AGENTS.md`, `pyproject.toml`, `scripts`, `specs`, `src`, `tests`) and surfaced a generic error that blamed the reviewer. Host-side edits to any of those paths during a reviewer stage tripped the guard with no diagnostic detail — observed with the `multi-agent` project on 2026-04-12 (orchestration-code-analysis, Stage 2 iter 2; reproduced again at iter 3 after a host edit to `specs/observability-phase1-spec.md`).
@@ -209,3 +224,33 @@ Gemini smoke-test stopped at `CODE_VALIDATED` due to 429 quota. State saved — 
   - passing a spec-named dependency under a specific parameter name
 - **Line the reviewer must enforce:** one committed shape per construction/entry surface is fine; enumerated alternatives, substring-scanning, "exactly N fields", or mandated EXTRA public APIs are blockers. Also added: "Under-specified spec surfaces" rule — if a REQ implies a public class but the spec does not name the signature, tests necessarily commit to something; that commitment is not a blocker. Spec feedback belongs at the spec stage, not in test-suite blockers.
 - **Both prompt changes are uncommitted in this repo.** When the user commits next, both prompt fixes should go in together.
+
+### Stage-1 effect check: bare `.py` filename extraction (2026-04-21, Slice 1) — FIXED
+
+- **Motivation:** Slice 1 `paths-shutil-which` first run: Codex correctly produced `tests/test_executables.py` + edits to `tests/test_pipeline_providers.py`, but the pipeline's Stage 1 effect check rejected the run with `FAIL: ... did not modify tests/ with files for task 'paths-shutil-which'`.
+- **Root cause:** `_build_task_test_terms` in `core.py` only scanned `.py` filenames inside single backticks (`` `x.py` ``). The `paths-shutil-which` spec listed the files under a triple-backtick Package Layout block, which the single-backtick regex did not match. Zero `.py` terms extracted → no test file was recognised as task-specific.
+- **Fix (2026-04-21):** Added a second regex `\b([A-Za-z_][A-Za-z0-9_]*\.py)\b` that scans the whole spec text for bare `.py` filenames. The backtick path is preserved (higher precision for inline mentions). Existing tests pass.
+
+### Reviewer oscillation / iteration-weighted approval gap (2026-04-21, Slice 3) — KNOWN, OPEN
+
+- **Motivation:** Original `otel-tracing-spec.md` (5 REQs + 5 ACs, ~121 lines) cap-exited Codex at Stage 2 iter 8 with 10 distinct, legitimate reviewer blockers accumulated across iterations — no single iteration's concern was wrong, but the pipeline couldn't converge within `--max-revisions 8`. Gemini retry hit quota. Slice was split into `otel-tracing-init` + `otel-tracing-wiring` and both narrower slices landed (3a) or made progress (3b).
+- **Finding:** The `reviewer.md` anti-oscillation rule covers contradictory-flip-flop oscillation ("would invert a previous request → prefer approval"), but NOT the sibling failure mode where each iteration surfaces a *different* legitimate gap. By iter 5+ on a Stage-2 review loop, a reviewer that keeps finding new nits is effectively preventing convergence even if each individual blocker is valid.
+- **Candidate fix (not yet implemented):** Add an "iteration-weighted approval" rule to `reviewer.md`: by Stage-2 iter ≥5, the reviewer should approve unless the current blocker is either (a) a newly-introduced regression from the last revision, or (b) an AC that is not exercised *at all* (not just imperfectly exercised). Also: confirmed in-run reviewer reversal at 3a iter 3→4 ("assert no tracer acquisition occurs" → "don't forbid tracer acquisition"), which the existing rule *should* already catch but apparently didn't.
+
+### Stage-1 effect check false-positive when spec omits new test file (2026-04-21, Slice 3b) — KNOWN, OPEN
+
+- **Motivation:** Slice 3b attempt 1: test-writer correctly created a new file `tests/test_pipeline_tracing_wiring.py` (sensibly separated from 3a's `tests/test_tracing.py`), but the effect check reported `FAIL: Stage 1: Test Generation did not modify tests/ with files for task 'otel-tracing-wiring'. Existing task-specific test files were not modified: tests/test_tracing.py.`
+- **Root cause:** The spec's Package Layout did not name `test_pipeline_tracing_wiring.py`, so `_build_task_test_terms` only extracted `test_tracing.py` (the 3a-shipped file) as "task-specific" via substring match on the task name. The effect check then demanded modifications to *that* file, which is exactly the wrong file for this slice.
+- **Workaround (applied):** Update the spec's Package Layout to explicitly list the new test file AND add a "do not modify" note for sibling-slice test files.
+- **Candidate fix (not yet implemented):** When Stage 1 adds a brand-new file under `tests/`, treat it as task-specific regardless of whether the spec names it. Alternatively: only flag the effect-check failure when the spec's Package Layout explicitly names an existing test file AND that file was not touched.
+
+### Cross-provider resume blocked on state mismatch (2026-04-21, Slice 3b) — BY DESIGN, DOCUMENTED
+
+- **Observation:** After Codex hit usage quota mid-Stage-2b, relaunching with `--provider gemini` on the same task failed immediately with `FAIL: resume provider mismatch. State recorded provider=codex, requested provider=gemini.`
+- **Status:** This is by design (the per-provider role config and output formats don't cleanly interchange mid-slice), but it defeats the "silent provider switch" pre-auth when it happens mid-revision loop. Documented here so we don't re-diagnose. Workaround: reset state (`rm -rf .pipeline-state/<task>*`) before switching provider.
+
+### Slice-3a success story: Stage-5 caught a mocked-test blind-spot (2026-04-21)
+
+- **Context:** Slice 3a's frozen tests monkey-patched the OTLP exporter to accept any `headers=` value and asserted wiring based on constructor kwargs. Stage-5 code review spotted that the real `opentelemetry.exporter.otlp.proto.http.trace_exporter.OTLPSpanExporter` raises `ValueError` when `OTEL_EXPORTER_OTLP_HEADERS` is passed as a raw string (not a dict), meaning the implementation would be broken in production even though all tests passed.
+- **Fix (applied in-pipeline):** Implementer added `_parse_otlp_headers` using `opentelemetry.util.re.parse_env_headers(..., liberal=True)` with a minimal fallback parser, and passed the parsed dict to the exporter.
+- **Lesson:** Stage-5 reviewing against real dependency behavior (not just mocked tests) caught a bug the test-writer couldn't have surfaced without an integration test. This is the premium-tier reviewer paying off.

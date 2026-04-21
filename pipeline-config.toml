@@ -1,0 +1,9 @@
+clarify_mode = "advisory" # optional: off | advisory | blocking (CLI --clarify-mode overrides)
+clarify_max_ambiguities = 2 # optional: positive integer cap for Stage 0 ambiguity items
+
+validation_commands = [
+    ["uv", "run", "ruff", "check", "src/", "tests/"],
+    ["uv", "run", "ruff", "format", "--check", "src/", "tests/"],
+    ["uv", "run", "pyright", "src/"],
+    ["uv", "run", "python", "-m", "pytest"],
+]

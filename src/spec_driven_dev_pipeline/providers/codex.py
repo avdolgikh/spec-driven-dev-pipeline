@@ -11,6 +11,7 @@ from typing import Any
 
 from spec_driven_dev_pipeline.core import EXIT_PROVIDER_EXEC_FAILED, PipelineError
 from spec_driven_dev_pipeline.providers.base import ProviderExecution
+from spec_driven_dev_pipeline.utils import executables as _executables
 
 
 @dataclass(frozen=True)
@@ -24,16 +25,22 @@ class CodexProvider:
 
     name = "codex"
     _sandbox_for_role = {
+        "clarify": "danger-full-access",
         "test-writer": "danger-full-access",
         "implementer": "danger-full-access",
         "reviewer": "danger-full-access",
     }
 
     def __init__(self) -> None:
+        economy_model = os.getenv("CODEX_MODEL_TEST_WRITER", "gpt-5.4-mini")
         self.role_configs = {
+            "clarify": RoleConfig(
+                tier="economy",
+                model=os.getenv("CODEX_MODEL_CLARIFY", economy_model),
+            ),
             "test-writer": RoleConfig(
                 tier="economy",
-                model=os.getenv("CODEX_MODEL_TEST_WRITER", "gpt-5.4-mini"),
+                model=economy_model,
             ),
             "implementer": RoleConfig(
                 tier="economy",
@@ -44,7 +51,7 @@ class CodexProvider:
                 model=os.getenv("CODEX_MODEL_REVIEWER", "gpt-5.4"),
             ),
         }
-        self.executable = Path(os.getenv("APPDATA", "")) / "npm" / "codex.cmd"
+        self.executable: str | Path | None = None
 
     def _scratch_dir(self, state_dir: Path, role: str) -> Path:
         path = state_dir / "codex" / role
@@ -64,10 +71,11 @@ class CodexProvider:
         repo_root: Path,
         output_path: Path,
         schema_path: Path | None,
+        executable: str = "codex",
     ) -> list[str]:
         config = self.role_configs[role]
         command = [
-            str(self.executable),
+            executable,
             "exec",
             "--ephemeral",
             "--skip-git-repo-check",
@@ -99,11 +107,7 @@ class CodexProvider:
         state_dir: Path,
         schema: dict[str, Any] | None = None,
     ) -> ProviderExecution:
-        if not self.executable.exists():
-            raise PipelineError(
-                "FAIL: Codex CLI was not found at the expected Windows npm shim path.",
-                EXIT_PROVIDER_EXEC_FAILED,
-            )
+        resolved_executable = _executables.resolve_executable(self.name, override=self.executable)
         config = self.role_configs[role]
         scratch_root = state_dir
         scratch_dir = self._scratch_dir(scratch_root, role)
@@ -120,6 +124,7 @@ class CodexProvider:
                 repo_root=repo_root,
                 output_path=output_path,
                 schema_path=schema_path,
+                executable=resolved_executable,
             ),
             cwd=repo_root,
             check=False,

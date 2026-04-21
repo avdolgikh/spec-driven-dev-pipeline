@@ -19,6 +19,7 @@ from typing import Any
 
 from spec_driven_dev_pipeline.core import EXIT_PROVIDER_EXEC_FAILED, PipelineError
 from spec_driven_dev_pipeline.providers.base import ProviderExecution
+from spec_driven_dev_pipeline.utils import executables as _executables
 
 
 @dataclass(frozen=True)
@@ -127,11 +128,12 @@ class OpenCodeProvider:
     def __init__(self) -> None:
         model = os.getenv("OPENCODE_MODEL", "ollama/qwen3.5:latest").strip()
         self.role_configs = {
+            "clarify": RoleConfig(tier="economy", model=model),
             "test-writer": RoleConfig(tier="economy", model=model),
             "implementer": RoleConfig(tier="economy", model=model),
             "reviewer": RoleConfig(tier="premium", model=model),
         }
-        self.executable = Path(os.getenv("APPDATA", "")) / "npm" / "opencode.cmd"
+        self.executable: str | Path | None = None
 
     def _tail(self, text: str, limit: int = 2000) -> str:
         stripped = text.strip()
@@ -160,6 +162,8 @@ class OpenCodeProvider:
                         prompt,
                     )
             return prompt
+        if role == "clarify":
+            return prompt
         # For test-writer and implementer: add file output instructions.
         return prompt + "\n" + _FILE_OUTPUT_INSTRUCTIONS
 
@@ -172,16 +176,12 @@ class OpenCodeProvider:
         state_dir: Path,
         schema: dict[str, Any] | None = None,
     ) -> ProviderExecution:
-        if not self.executable.exists():
-            raise PipelineError(
-                "FAIL: OpenCode CLI was not found at the expected Windows npm shim path.",
-                EXIT_PROVIDER_EXEC_FAILED,
-            )
+        resolved_executable = _executables.resolve_executable(self.name, override=self.executable)
         config = self.role_configs[role]
         augmented_prompt = self._augment_prompt(prompt, role, repo_root)
 
         command = [
-            str(self.executable),
+            resolved_executable,
             "run",
             "-m",
             config.model,
@@ -217,7 +217,7 @@ class OpenCodeProvider:
         output = result.stdout.strip()
 
         # Write extracted file blocks to disk (test-writer and implementer).
-        if role != "reviewer":
+        if role in {"test-writer", "implementer"}:
             for rel_path, content in extract_file_blocks(output):
                 target = repo_root / rel_path
                 target.parent.mkdir(parents=True, exist_ok=True)

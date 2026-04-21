@@ -11,6 +11,7 @@ from typing import Any
 
 from spec_driven_dev_pipeline.core import EXIT_PROVIDER_EXEC_FAILED, PipelineError
 from spec_driven_dev_pipeline.providers.base import ProviderExecution
+from spec_driven_dev_pipeline.utils import executables as _executables
 
 
 @dataclass(frozen=True)
@@ -28,11 +29,15 @@ class GeminiProvider:
         economy = os.getenv("GEMINI_MODEL_ECONOMY", "gemini-2.5-flash").strip()
         premium = os.getenv("GEMINI_MODEL_PREMIUM", "gemini-2.5-pro").strip()
         self.role_configs = {
+            "clarify": RoleConfig(
+                tier="economy",
+                model=os.getenv("GEMINI_MODEL_CLARIFY", economy).strip(),
+            ),
             "test-writer": RoleConfig(tier="economy", model=economy),
             "implementer": RoleConfig(tier="economy", model=economy),
             "reviewer": RoleConfig(tier="premium", model=premium),
         }
-        self.executable = Path(os.getenv("APPDATA", "")) / "npm" / "gemini.cmd"
+        self.executable: str | Path | None = None
 
     def _tail(self, text: str, limit: int = 2000) -> str:
         stripped = text.strip()
@@ -40,10 +45,10 @@ class GeminiProvider:
             return stripped
         return "[truncated]\n" + stripped[-limit:]
 
-    def _command(self, *, role: str) -> list[str]:
+    def _command(self, *, role: str, executable: str = "gemini") -> list[str]:
         config = self.role_configs[role]
         return [
-            str(self.executable),
+            executable,
             "--yolo",
             "-m",
             config.model,
@@ -99,13 +104,9 @@ class GeminiProvider:
         state_dir: Path,
         schema: dict[str, Any] | None = None,
     ) -> ProviderExecution:
-        if not self.executable.exists():
-            raise PipelineError(
-                "FAIL: Gemini CLI was not found at the expected Windows npm shim path.",
-                EXIT_PROVIDER_EXEC_FAILED,
-            )
+        resolved_executable = _executables.resolve_executable(self.name, override=self.executable)
         config = self.role_configs[role]
-        command = self._command(role=role)
+        command = self._command(role=role, executable=resolved_executable)
         # Feed prompt via stdin to avoid Windows command-line length limits.
         result = subprocess.run(
             command,

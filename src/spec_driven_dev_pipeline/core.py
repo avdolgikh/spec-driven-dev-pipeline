@@ -62,6 +62,8 @@ class PipelineConfig:
         default_factory=lambda: ["AGENTS.md", "pyproject.toml", "scripts", "specs", "src", "tests"]
     )
     prompts_dir: str | None = None
+    clarify_mode: str = "advisory"
+    clarify_max_ambiguities: int = 2
 
 
 TRANSIENT_PATH_PARTS = {"__pycache__", ".pytest_cache", ".ruff_cache"}
@@ -212,9 +214,11 @@ class PromptBuilder:
         iteration: int = 0,
         reviewer_feedback: list[str] | None = None,
         prior_feedback: list[str] | None = None,
+        clarifications: dict[str, str] | None = None,
     ) -> str:
         feedback = reviewer_feedback or []
         prior = prior_feedback or []
+        clarify_answers = clarifications or {}
         spec_text = spec_path.read_text(encoding="utf-8-sig").strip()
         sections = [
             self.role_prompt(role),
@@ -241,6 +245,11 @@ class PromptBuilder:
                 ]
             )
             sections.extend([f"  - {item}" for item in prior])
+        if clarify_answers and role in {"test-writer", "reviewer"}:
+            sections.extend(["", "## Clarifications"])
+            sections.extend(
+                [f"- {decision}: {answer}" for decision, answer in clarify_answers.items()]
+            )
         sections.extend(
             [
                 "",
@@ -708,7 +717,12 @@ class PipelineRunner:
             spec_text = self.spec_path.read_text(encoding="utf-8-sig")
         except FileNotFoundError:
             return sorted(terms)
-        for raw in re.findall(r"`([^`\n]+)`", spec_text):
+        backticked = re.findall(r"`([^`\n]+)`", spec_text)
+        # Also scan for .py filenames outside of inline backticks — specs
+        # typically list Package Layout filenames inside fenced code blocks,
+        # which the backtick regex above does not capture.
+        bare = re.findall(r"\b([A-Za-z_][A-Za-z0-9_]*\.py)\b", spec_text)
+        for raw in (*backticked, *bare):
             cleaned = raw.strip().lower()
             if not cleaned.endswith(".py"):
                 continue
@@ -728,6 +742,12 @@ class PipelineRunner:
             for path, digest in after.items()
             if self._is_task_test_file(path) and before.get(path) != digest
         ]
+
+    def _has_other_task_state_file(self) -> bool:
+        if not self.state_dir.exists():
+            return False
+        current = f"{self.task}.json"
+        return any(path.name != current for path in self.state_dir.glob("*.json"))
 
     def _artifact_snapshot(self, relative_targets: list[str]) -> str:
         max_total_chars = 3000
@@ -805,6 +825,8 @@ class PipelineRunner:
             after_files = self._tests_file_hashes()
             if self._changed_task_test_files(before_files, after_files):
                 return
+            if allow_existing and before_hash == after_hash and self._has_other_task_state_file():
+                return
             existing = sorted(p for p in before_files if self._is_task_test_file(p))[:3]
             detail = (
                 f" Existing task-specific test files were not modified: {', '.join(existing)}."
@@ -833,6 +855,154 @@ class PipelineRunner:
 
     def _validation_description(self) -> str:
         return _describe_validation_suite(self.config)
+
+    def _clarify_mode(self) -> str:
+        raw = str(getattr(self.config, "clarify_mode", "advisory")).strip().lower()
+        return raw if raw in {"off", "advisory", "blocking"} else "advisory"
+
+    def _clarify_max_ambiguities(self) -> int:
+        raw = getattr(self.config, "clarify_max_ambiguities", 2)
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            return 2
+        return value if value > 0 else 2
+
+    def _clarify_artifact_path(self) -> Path:
+        return self.state_dir / "clarify" / f"{self.task}-clarify.json"
+
+    def _load_clarify_artifact(self) -> dict[str, Any] | None:
+        path = self._clarify_artifact_path()
+        if not path.exists():
+            return None
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return None
+        return payload if isinstance(payload, dict) else None
+
+    def _clarify_answers(self, payload: dict[str, Any] | None) -> dict[str, str]:
+        if not payload:
+            return {}
+        raw = payload.get("answers")
+        if not isinstance(raw, dict):
+            return {}
+        normalized: dict[str, str] = {}
+        for decision, answer in raw.items():
+            if not isinstance(decision, str) or not isinstance(answer, str):
+                continue
+            key = decision.strip()
+            value = answer.strip()
+            if key and value:
+                normalized[key] = value
+        return normalized
+
+    def _normalize_clarify_payload(self, raw_output: str) -> dict[str, Any]:
+        try:
+            payload = json.loads(raw_output)
+        except json.JSONDecodeError:
+            payload = {}
+
+        raw_ambiguities = payload.get("ambiguities", []) if isinstance(payload, dict) else []
+        normalized: list[dict[str, Any]] = []
+        if isinstance(raw_ambiguities, list):
+            for item in raw_ambiguities:
+                if not isinstance(item, dict):
+                    continue
+                source = item.get("source")
+                decision = item.get("decision")
+                answers = item.get("answers")
+                if not isinstance(source, str) or not isinstance(decision, str):
+                    continue
+                if not isinstance(answers, list):
+                    continue
+                source_text = source.strip()
+                decision_text = decision.strip()
+                if not source_text or not decision_text:
+                    continue
+                answer_list: list[str] = []
+                for answer in answers:
+                    if not isinstance(answer, str):
+                        continue
+                    normalized_answer = answer.strip()
+                    if normalized_answer and normalized_answer not in answer_list:
+                        answer_list.append(normalized_answer)
+                if len(answer_list) < 2:
+                    continue
+                normalized.append(
+                    {
+                        "source": source_text,
+                        "decision": decision_text,
+                        "answers": answer_list[:4],
+                    }
+                )
+                if len(normalized) >= self._clarify_max_ambiguities():
+                    break
+        return {"ambiguities": normalized}
+
+    def _write_clarify_artifact(self, payload: dict[str, Any]) -> Path:
+        path = self._clarify_artifact_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        relative = path.relative_to(self.repo_root).as_posix()
+        self.logger.log(f"[clarify] artifact written: {relative}")
+        return path
+
+    def _run_clarify_stage_if_needed(self, state: PipelineState) -> dict[str, Any] | None:
+        mode = self._clarify_mode()
+        if mode == "off":
+            return None
+
+        payload = self._load_clarify_artifact()
+        if self._clarify_answers(payload):
+            self.logger.log("[clarify] reusing answered artifact.")
+            return payload
+
+        if mode == "blocking" and self._past(state.stage, "TESTS_GENERATED"):
+            raise PipelineError(
+                "FAIL: clarify mode is blocking and requires answered clarifications before "
+                "resuming downstream stages.",
+                EXIT_STAGE_NO_EFFECT,
+            )
+
+        if self._past(state.stage, "TESTS_GENERATED"):
+            return payload
+
+        clarify_prompt_path = self.prompts.prompts_dir / "clarify.md"
+        if not clarify_prompt_path.exists():
+            if mode == "blocking":
+                raise PipelineError(
+                    "FAIL: clarify mode is blocking but clarify prompt template is missing.",
+                    EXIT_STAGE_NO_EFFECT,
+                )
+            self.logger.log("[clarify] advisory mode: clarify prompt missing; skipping stage.")
+            return payload
+
+        self._log_stage_header("Stage 0: Clarify Spec")
+        prompt = self.prompts.render(
+            role="clarify",
+            task=self.task,
+            spec_path=self.spec_path,
+            stage_name="Stage 0: Clarify Spec",
+            stage_instruction=(
+                "Identify the highest-impact ambiguities in the approved spec. For each ambiguity, "
+                "include the source phrase, the unresolved decision, and 2-4 plausible answers."
+            ),
+        )
+        execution = self._run_role(
+            role="clarify",
+            prompt=prompt,
+            stage_label="Stage 0: Clarify Spec",
+        )
+        payload = self._normalize_clarify_payload(execution.output)
+        self._write_clarify_artifact(payload)
+        if mode == "blocking" and not self._clarify_answers(payload):
+            raise PipelineError(
+                "FAIL: clarify mode is blocking and requires answered clarifications before "
+                "test generation.",
+                EXIT_STAGE_NO_EFFECT,
+            )
+        return payload
 
     def _run_pytest_gate(self, label: str) -> None:
         self.logger.log("")
@@ -1086,7 +1256,21 @@ class PipelineRunner:
         self.logger.log(f"=== Spec: {self.spec_path.as_posix()} ===")
         self.logger.log(f"=== Provider: {self.provider.name} ===")
 
+        # Preflight: verify the provider CLI is discoverable before running any
+        # stage. Raises PipelineError(EXIT_PROVIDER_EXEC_FAILED) if missing.
+        # Providers without an `executable` attribute (e.g. in-process test
+        # doubles) are exempt.
+        if hasattr(self.provider, "executable"):
+            from spec_driven_dev_pipeline.utils.executables import resolve_executable
+
+            resolve_executable(
+                self.provider.name,
+                override=getattr(self.provider, "executable"),  # noqa: B009
+            )
+
         state = self._load_state()
+        clarify_payload = self._run_clarify_stage_if_needed(state)
+        clarifications = self._clarify_answers(clarify_payload)
 
         if not self._past(state.stage, "TESTS_GENERATED"):
             self._log_stage_header("Stage 1: Test Generation")
@@ -1102,6 +1286,7 @@ class PipelineRunner:
                     f"acceptance criteria in {self.config.tests_dir}/. Confirm the tests are red with `{_describe_validation_suite(self.config)}`. "
                     "Do not write production code."
                 ),
+                clarifications=clarifications,
             )
             execution = self._run_role(
                 role="test-writer",
@@ -1134,6 +1319,7 @@ class PipelineRunner:
                         "Return only the canonical review decision JSON."
                     ),
                     iteration=iteration,
+                    clarifications=clarifications,
                 )
                 decision = self._run_review_role(
                     prompt=prompt,
@@ -1170,6 +1356,7 @@ class PipelineRunner:
                     iteration=iteration,
                     reviewer_feedback=decision.blocking,
                     prior_feedback=prior_test_blocking,
+                    clarifications=clarifications,
                 )
                 execution = self._run_role(
                     role="test-writer",
@@ -1251,6 +1438,7 @@ class PipelineRunner:
                         "canonical review decision JSON."
                     ),
                     iteration=iteration,
+                    clarifications=clarifications,
                 )
                 decision = self._run_review_role(
                     prompt=prompt,

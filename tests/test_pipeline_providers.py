@@ -25,26 +25,46 @@ def test_claude_provider_builds_schema_command():
     assert "--json-schema" in command
 
 
-def test_codex_provider_uses_windows_cmd_shim(tmp_path: Path):
+def test_codex_provider_uses_configured_executable_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
     provider = CodexProvider()
-    command = provider._command(
+    provider.executable = tmp_path / "bin" / "codex"
+    provider.executable.parent.mkdir(parents=True, exist_ok=True)
+    provider.executable.write_text("@echo off\n", encoding="utf-8")
+    captured: dict[str, object] = {}
+
+    def fake_run(command, **kwargs):
+        captured["command"] = command
+        captured["kwargs"] = kwargs
+        output_path = Path(command[command.index("--output-last-message") + 1])
+        output_path.write_text("final codex answer\n", encoding="utf-8")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("spec_driven_dev_pipeline.providers.codex.subprocess.run", fake_run)
+
+    state_dir = tmp_path / ".pipeline-state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    result = provider.run_role(
         role="implementer",
+        prompt="Implement code",
         repo_root=tmp_path,
-        output_path=tmp_path / "out.txt",
-        schema_path=tmp_path / "schema.json",
+        state_dir=state_dir,
     )
-    assert command[0].endswith("codex.cmd")
-    assert command[1] == "exec"
-    assert "--model" in command
-    assert "gpt-5.3-codex" in command
-    assert "--output-schema" in command
-    assert "--ephemeral" in command
-    assert "--skip-git-repo-check" in command
-    assert command[command.index("--model") + 1] == "gpt-5.3-codex"
-    assert command[command.index("--output-schema") + 1].endswith("schema.json")
-    assert command[command.index("--sandbox") + 1] == "danger-full-access"
-    assert command[-1] == "-"
-    assert "--ask-for-approval" not in command
+
+    assert result.output == "final codex answer"
+    assert Path(captured["command"][0]) == provider.executable.resolve()
+    assert Path(captured["command"][0]).is_absolute()
+    assert captured["command"][1] == "exec"
+    assert "--model" in captured["command"]
+    assert "gpt-5.3-codex" in captured["command"]
+    assert "--output-schema" not in captured["command"]
+    assert "--ephemeral" in captured["command"]
+    assert "--skip-git-repo-check" in captured["command"]
+    assert captured["command"][captured["command"].index("--model") + 1] == "gpt-5.3-codex"
+    assert captured["command"][captured["command"].index("--sandbox") + 1] == "danger-full-access"
+    assert captured["command"][-1] == "-"
+    assert "--ask-for-approval" not in captured["command"]
 
 
 def test_codex_reviewer_uses_danger_full_access_with_immutability_guard(tmp_path: Path):
@@ -67,7 +87,7 @@ def test_codex_provider_default_role_models_are_explicit():
 
 def test_codex_provider_reads_last_message_from_workspace_scratch(tmp_path: Path, monkeypatch):
     provider = CodexProvider()
-    provider.executable = tmp_path / "codex.cmd"
+    provider.executable = tmp_path / "codex"
     provider.executable.write_text("@echo off\\n", encoding="utf-8")
     captured: dict[str, object] = {}
 
@@ -107,7 +127,7 @@ def test_codex_provider_reads_last_message_from_workspace_scratch(tmp_path: Path
 
 def test_codex_provider_surfaces_process_diagnostics_on_failure(tmp_path: Path, monkeypatch):
     provider = CodexProvider()
-    provider.executable = tmp_path / "codex.cmd"
+    provider.executable = tmp_path / "codex"
     provider.executable.write_text("@echo off\\n", encoding="utf-8")
 
     def fake_run(command, **kwargs):  # noqa: ANN001
