@@ -17,19 +17,6 @@ from opentelemetry.trace import StatusCode
 
 from spec_driven_dev_pipeline.providers.base import ProviderExecution
 
-# !!! UNSKIP-BEFORE-RESUME !!!
-# When resuming Slice 3b (`otel-tracing-wiring`), DELETE this `pytestmark` block
-# BEFORE relaunching the pipeline. Skipped tests pass vacuously — Stage 4
-# validation will green-light an unwired `core.py` otherwise.
-# Re-enable recipe: remove the block below, confirm `uv run python -m pytest
-# tests/test_pipeline_tracing_wiring.py` is RED (expected: impl pending), then
-# launch the pipeline. See AGENTS.md Rule #10 + Known Gaps section.
-pytestmark = pytest.mark.skip(
-    reason="Slice 3b (otel-tracing-wiring) implementation pending; remove this "
-    "skip when core.py tracing wiring lands. See AGENTS.md Known Gaps."
-)
-
-
 CORE_MODULE = "spec_driven_dev_pipeline.core"
 TRACING_MODULE = "spec_driven_dev_pipeline.utils.tracing"
 OTLP_EXPORTER_MODULES = (
@@ -86,17 +73,21 @@ def _span_has_namespaced_value(span, expected_value: object) -> bool:
 
 
 def _single_child_span_with_values(spans, parent_span, *expected_values: object):
+    parent_span_id = (
+        parent_span.context.span_id if hasattr(parent_span, "context") else parent_span.span_id
+    )
+    parent_label = getattr(parent_span, "name", f"span_id={parent_span_id:x}")
     matches = [
         span
         for span in spans
         if span.parent is not None
-        and span.parent.span_id == parent_span.context.span_id
+        and span.parent.span_id == parent_span_id
         and all(
             _span_has_namespaced_value(span, expected_value) for expected_value in expected_values
         )
     ]
     assert len(matches) == 1, (
-        f"Expected one child span of {parent_span.name!r} with values {expected_values!r}, found {len(matches)}"
+        f"Expected one child span of {parent_label!r} with values {expected_values!r}, found {len(matches)}"
     )
     return matches[0]
 
@@ -362,7 +353,9 @@ def _find_stage_with_direct_leaf(
         for child_span in _ordered_children(spans, stage_span):
             if child_span.context.span_id in children_by_parent_id:
                 continue
-            if _single_child_span_with_values([child_span], stage_span, provider_name, model):
+            if _span_has_namespaced_value(child_span, provider_name) and _span_has_namespaced_value(
+                child_span, model
+            ):
                 return stage_span, child_span
     raise AssertionError(f"Expected a stage with a direct provider leaf for model {model!r}")
 

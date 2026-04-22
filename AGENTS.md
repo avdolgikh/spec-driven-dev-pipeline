@@ -177,9 +177,17 @@ Full report: `benchmarks/benchmark-calc-report.md`
 
 All four gaps from `specs/pipeline-hardening-spec.md` are now implemented (REQ-1 through REQ-4). Additionally, REQ-3's Stage 1 effect check now derives valid test file names from source files mentioned in the spec (e.g., spec mentions `seed.py` → `test_seed` is accepted as a task-specific test term).
 
-### `tests/test_pipeline_tracing_wiring.py` skipped pending Slice 3b impl (2026-04-21) — TEMPORARY
+### `src/spec_driven_dev_pipeline/core.py` is too long (2026-04-21) — KNOWN, OPEN
 
-- File-level `pytestmark = pytest.mark.skip(...)` added under Rule #10 to keep CI green. Test contract is frozen (654 lines, 3× reviewer-passed in Slice 3b attempt 2). Unskip by deleting the `pytestmark` block in the same commit that lands the `core.py` tracing wiring.
+- Through Slices 1–3b `core.py` has grown past ~1700 lines. Readable end-to-end but at the upper edge of "one file I can hold in my head."
+- Candidate split (validate during design, not prescriptive): state machine / enforcement (hash, freeze, reviewer-immutability) / stage orchestration (runner) / prompt+config dataclasses / tracing-wiring helpers.
+- Treat as its own pipeline slice (spec-driven). Don't bundle with a feature slice. Slice after Tier 2 (`spec-frontmatter`, `per-role-model-routing`) lands so the refactor sees the fuller shape.
+
+### Stage 5 reviewer can prescribe new tests, which Stage 5b freeze then rejects (2026-04-21, Slice 3b) — KNOWN, OPEN
+
+- Observed during 3b attempt 3: reviewer blocked with *"Clear or shut down prior tracing state … and add a wiring test for the configured-then-unconfigured sequence."* Codex's Stage 5b revision complied literally, modifying the frozen test file; `_enforce_test_freeze` (correctly) rejected the run with `FAIL: frozen test files were modified after the test-freeze boundary.` Pipeline exited without advancing past `CODE_VALIDATED`.
+- Root cause is a prompt scope issue: the reviewer role should assess the implementation against the *existing* spec ACs, not prescribe test additions that belong in an earlier stage. Fix belongs in `prompts/reviewer.md` — constrain Stage 5 reviewer output to impl-side findings; test-coverage asks are out of scope post-freeze.
+- Worked around manually: reverted the test-file mutation and relaunched; reviewer approved on the second attempt once no new tests were requested.
 
 ### Misleading `EXIT_REVIEWER_MODIFIED_FILES` on concurrent host edits (2026-04-12) — FIXED
 

@@ -65,6 +65,46 @@ context_file = "AGENTS.md"
 
 Target any repo with `--repo-root <path>`.
 
+## OpenTelemetry Tracing (Phoenix)
+
+Tracing is opt-in and uses standard OTLP environment variables. When
+`OTEL_EXPORTER_OTLP_ENDPOINT` is unset, the pipeline runs with no exporter
+configured (no OTLP network calls).
+
+Supported variables:
+
+- `OTEL_EXPORTER_OTLP_ENDPOINT` (required to enable tracing): OTLP endpoint
+  URL (for Phoenix, use its traces ingest endpoint).
+- `OTEL_SERVICE_NAME` (optional): service name shown in traces.
+  Default: `spec-driven-pipeline`.
+- `OTEL_EXPORTER_OTLP_HEADERS` (optional): comma-separated headers in
+  `key=value,key2=value2` format.
+
+Phoenix workflow:
+
+1. Start Phoenix so its OTLP ingest endpoint is available. Phoenix's default
+   HTTP ingest is `http://localhost:6006/v1/traces` (UI on the same port).
+2. Set `OTEL_EXPORTER_OTLP_ENDPOINT` to the Phoenix HTTP traces endpoint.
+   `OTEL_SERVICE_NAME` doubles as the Phoenix project name — this pipeline
+   sets `openinference.project.name` equal to `OTEL_SERVICE_NAME`, so spans
+   land in a project of that name (not `default`).
+3. Run the pipeline normally (for example
+   `uv run python scripts/run_pipeline.py <task-id> --provider codex`).
+4. Open Phoenix and inspect the run trace under the project that matches
+   `OTEL_SERVICE_NAME` (root run span, stage spans, per-provider leaves).
+
+Minimal example:
+
+```bash
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:6006/v1/traces \
+OTEL_SERVICE_NAME=spec-driven-pipeline \
+uv run python scripts/run_pipeline.py my-task --provider codex
+```
+
+A no-LLM smoke test that exports a representative trace end-to-end is
+available at `scripts/telemetry_smoke.py` — useful to verify connectivity
+without waiting on providers.
+
 ## Providers
 
 Each provider wraps a CLI tool. Model selection uses two tiers:

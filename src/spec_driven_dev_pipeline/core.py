@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 import hashlib
 import json
@@ -15,6 +16,7 @@ from typing import Any
 import yaml
 
 from spec_driven_dev_pipeline.providers.base import Provider, ProviderExecution
+from spec_driven_dev_pipeline.utils import tracing
 
 
 REVIEW_SCHEMA: dict[str, Any] = {
@@ -85,6 +87,7 @@ EXIT_EVALUATION_FAILED = 12
 EXIT_ACCEPTANCE_FAILED = 13
 EXIT_ARTIFACT_MISSING = 14
 EXIT_FINAL_TESTS_FAILED = 15
+TRACE_NAMESPACE = "pipeline"
 
 
 class PipelineError(RuntimeError):
@@ -557,6 +560,59 @@ class PipelineRunner:
         self.logger.log(label)
         self.logger.log("=" * len(label))
 
+    def _trace_stage_key(self, stage_label: str) -> str:
+        normalized = re.sub(r"[^a-z0-9]+", "_", stage_label.lower()).strip("_")
+        return normalized or "stage"
+
+    def _trace_attributes(self, **attributes: Any) -> dict[str, Any]:
+        return {
+            f"{TRACE_NAMESPACE}.{key}": value
+            for key, value in attributes.items()
+            if value is not None
+        }
+
+    def _set_trace_attributes(self, **attributes: Any) -> None:
+        namespaced = self._trace_attributes(**attributes)
+        if namespaced:
+            tracing.set_span_attributes(**namespaced)
+
+    @contextmanager
+    def _trace_stage(self, stage_label: str):
+        stage_key = self._trace_stage_key(stage_label)
+        with tracing.span(f"pipeline.stage.{stage_key}"):
+            self._set_trace_attributes(
+                task=self.task,
+                stage=stage_key,
+                stage_label=stage_label,
+            )
+            control = {"outcome": "success"}
+            try:
+                yield control
+            except Exception:
+                control["outcome"] = "error"
+                raise
+            finally:
+                self._set_trace_attributes(outcome=control["outcome"])
+
+    @contextmanager
+    def _trace_iteration(self, stage_label: str, iteration: int):
+        stage_key = self._trace_stage_key(stage_label)
+        with tracing.span(f"pipeline.iteration.{stage_key}"):
+            self._set_trace_attributes(
+                task=self.task,
+                stage=stage_key,
+                stage_label=stage_label,
+                iteration=iteration,
+            )
+            control = {"outcome": "success"}
+            try:
+                yield control
+            except Exception:
+                control["outcome"] = "error"
+                raise
+            finally:
+                self._set_trace_attributes(outcome=control["outcome"])
+
     def _load_state(self) -> PipelineState:
         if not self.state_file.exists():
             return PipelineState(task=self.task, provider=self.provider.name, stage="SPEC_APPROVED")
@@ -979,29 +1035,32 @@ class PipelineRunner:
             return payload
 
         self._log_stage_header("Stage 0: Clarify Spec")
-        prompt = self.prompts.render(
-            role="clarify",
-            task=self.task,
-            spec_path=self.spec_path,
-            stage_name="Stage 0: Clarify Spec",
-            stage_instruction=(
-                "Identify the highest-impact ambiguities in the approved spec. For each ambiguity, "
-                "include the source phrase, the unresolved decision, and 2-4 plausible answers."
-            ),
-        )
-        execution = self._run_role(
-            role="clarify",
-            prompt=prompt,
-            stage_label="Stage 0: Clarify Spec",
-        )
-        payload = self._normalize_clarify_payload(execution.output)
-        self._write_clarify_artifact(payload)
-        if mode == "blocking" and not self._clarify_answers(payload):
-            raise PipelineError(
-                "FAIL: clarify mode is blocking and requires answered clarifications before "
-                "test generation.",
-                EXIT_STAGE_NO_EFFECT,
+        with self._trace_stage("Stage 0: Clarify Spec") as stage_trace:
+            prompt = self.prompts.render(
+                role="clarify",
+                task=self.task,
+                spec_path=self.spec_path,
+                stage_name="Stage 0: Clarify Spec",
+                stage_instruction=(
+                    "Identify the highest-impact ambiguities in the approved spec. For each ambiguity, "
+                    "include the source phrase, the unresolved decision, and 2-4 plausible answers."
+                ),
             )
+            execution = self._run_role(
+                role="clarify",
+                prompt=prompt,
+                stage_label="Stage 0: Clarify Spec",
+            )
+            payload = self._normalize_clarify_payload(execution.output)
+            self._write_clarify_artifact(payload)
+            if mode == "blocking" and not self._clarify_answers(payload):
+                stage_trace["outcome"] = "blocked"
+                raise PipelineError(
+                    "FAIL: clarify mode is blocking and requires answered clarifications before "
+                    "test generation.",
+                    EXIT_STAGE_NO_EFFECT,
+                )
+            stage_trace["outcome"] = "completed"
         return payload
 
     def _run_pytest_gate(self, label: str) -> None:
@@ -1060,25 +1119,47 @@ class PipelineRunner:
         )
         retries = 0
         max_retries = max(0, int(self.config.provider_retry_attempts))
+        stage_key = self._trace_stage_key(stage_label)
         while True:
-            try:
-                execution = self.provider.run_role(
+            with tracing.span(f"pipeline.provider.{stage_key}.{role}"):
+                self._set_trace_attributes(
+                    task=self.task,
+                    stage=stage_key,
+                    stage_label=stage_label,
                     role=role,
-                    prompt=prompt,
-                    repo_root=self.repo_root,
-                    state_dir=self.state_dir,
-                    schema=schema,
+                    provider=self.provider.name,
+                    retry_attempt=retries,
+                )
+                try:
+                    execution = self.provider.run_role(
+                        role=role,
+                        prompt=prompt,
+                        repo_root=self.repo_root,
+                        state_dir=self.state_dir,
+                        schema=schema,
+                    )
+                except PipelineError as exc:
+                    if exc.exit_code != EXIT_PROVIDER_EXEC_FAILED or retries >= max_retries:
+                        self._set_trace_attributes(outcome="error")
+                        raise
+                    retries += 1
+                    self._set_trace_attributes(outcome="retry", retry_attempt=retries)
+                    self.logger.log(
+                        f"[provider] transient failure exit={exc.exit_code}; "
+                        f"retrying {retries}/{max_retries}"
+                    )
+                    time.sleep(2)
+                    continue
+                except Exception:
+                    self._set_trace_attributes(outcome="error")
+                    raise
+                self._set_trace_attributes(
+                    provider=execution.provider,
+                    model=execution.model,
+                    tier=execution.tier,
+                    outcome="completed",
                 )
                 break
-            except PipelineError as exc:
-                if exc.exit_code != EXIT_PROVIDER_EXEC_FAILED or retries >= max_retries:
-                    raise
-                retries += 1
-                self.logger.log(
-                    f"[provider] transient failure exit={exc.exit_code}; "
-                    f"retrying {retries}/{max_retries}"
-                )
-                time.sleep(2)
         self.logger.log(
             f"[provider] provider={execution.provider} role={execution.role} "
             f"tier={execution.tier} model={execution.model}"
@@ -1244,7 +1325,7 @@ class PipelineRunner:
                 self.logger.log(f"[{status}] {check.label} ({check.actual} vs {check.threshold})")
         return checks
 
-    def run(self) -> int:
+    def _run_impl(self) -> int:
         if not self.spec_path.exists():
             raise PipelineError(
                 f"ERROR: Spec not found: {self.spec_path.as_posix()}", EXIT_SPEC_NOT_FOUND
@@ -1274,101 +1355,114 @@ class PipelineRunner:
 
         if not self._past(state.stage, "TESTS_GENERATED"):
             self._log_stage_header("Stage 1: Test Generation")
-            before_tests_hash = self._tests_hash()
-            before_file_hashes = self._tests_file_hashes()
-            prompt = self.prompts.render(
-                role="test-writer",
-                task=self.task,
-                spec_path=self.spec_path,
-                stage_name="Stage 1: Test Generation",
-                stage_instruction=(
-                    f"Read the approved spec{f' and {self.config.context_file}' if self.config.context_file else ''}. Write tests for this task covering all "
-                    f"acceptance criteria in {self.config.tests_dir}/. Confirm the tests are red with `{_describe_validation_suite(self.config)}`. "
-                    "Do not write production code."
-                ),
-                clarifications=clarifications,
-            )
-            execution = self._run_role(
-                role="test-writer",
-                prompt=prompt,
-                stage_label="Stage 1: Test Generation",
-            )
-            self._ensure_tests_stage_effect(
-                before_hash=before_tests_hash,
-                execution=execution,
-                stage_label="Stage 1: Test Generation",
-                allow_existing=True,
-                before_file_hashes=before_file_hashes,
-            )
-            self._save_state("TESTS_GENERATED")
-            state = self._load_state()
-
-        if not self._past(state.stage, "TESTS_FROZEN"):
-            start = self._start_iteration(state, "TESTS_GENERATED")
-            cumulative_test_blocking: list[str] = []
-            for iteration in range(start, self.max_revisions + 1):
-                self._log_stage_header(f"Stage 2: Test Review (iter {iteration})")
-                before_file_hashes = self._repo_file_hashes()
-                prompt = self.prompts.render(
-                    role="reviewer",
-                    task=self.task,
-                    spec_path=self.spec_path,
-                    stage_name="Stage 2: Test Review",
-                    stage_instruction=(
-                        "Review only the test files relevant to the approved spec for this task. Ignore unrelated workspace changes outside the spec scope. "
-                        "Return only the canonical review decision JSON."
-                    ),
-                    iteration=iteration,
-                    clarifications=clarifications,
-                )
-                decision = self._run_review_role(
-                    prompt=prompt,
-                    stage_label="Stage 2: Test Review",
-                    before_file_hashes=before_file_hashes,
-                )
-                if decision.fallback_used:
-                    self.logger.log("[review] fallback normalization path used")
-                self.logger.log(f"Decision: {decision.decision}")
-                if decision.decision == "approve":
-                    frozen_tests_hash = self._tests_hash()
-                    self._save_state("TESTS_FROZEN", frozen_tests_hash=frozen_tests_hash)
-                    break
-                if iteration == self.max_revisions:
-                    raise PipelineError(
-                        f"FAIL: test revision cap reached after {self.max_revisions} iterations.",
-                        EXIT_TEST_REVISION_CAP,
-                    )
-                self._log_stage_header(f"Stage 2b: Test Revision (iter {iteration})")
+            with self._trace_stage("Stage 1: Test Generation"):
                 before_tests_hash = self._tests_hash()
-                prior_test_blocking = list(cumulative_test_blocking)
-                cumulative_test_blocking.extend(
-                    item for item in decision.blocking if item not in cumulative_test_blocking
-                )
-                revise_prompt = self.prompts.render(
+                before_file_hashes = self._tests_file_hashes()
+                prompt = self.prompts.render(
                     role="test-writer",
                     task=self.task,
                     spec_path=self.spec_path,
-                    stage_name="Stage 2b: Test Revision",
+                    stage_name="Stage 1: Test Generation",
                     stage_instruction=(
-                        "Revise the test suite to address the reviewer blocking feedback. "
-                        f"Do not touch production code. Re-run `{_describe_validation_suite(self.config)}` after revisions."
+                        f"Read the approved spec{f' and {self.config.context_file}' if self.config.context_file else ''}. Write tests for this task covering all "
+                        f"acceptance criteria in {self.config.tests_dir}/. Confirm the tests are red with `{_describe_validation_suite(self.config)}`. "
+                        "Do not write production code."
                     ),
-                    iteration=iteration,
-                    reviewer_feedback=decision.blocking,
-                    prior_feedback=prior_test_blocking,
                     clarifications=clarifications,
                 )
                 execution = self._run_role(
                     role="test-writer",
-                    prompt=revise_prompt,
-                    stage_label="Stage 2b: Test Revision",
+                    prompt=prompt,
+                    stage_label="Stage 1: Test Generation",
                 )
                 self._ensure_tests_stage_effect(
                     before_hash=before_tests_hash,
                     execution=execution,
-                    stage_label="Stage 2b: Test Revision",
+                    stage_label="Stage 1: Test Generation",
+                    allow_existing=True,
+                    before_file_hashes=before_file_hashes,
                 )
-                self._save_state("TESTS_GENERATED", iteration=iteration + 1)
+                self._save_state("TESTS_GENERATED")
+            state = self._load_state()
+
+        if not self._past(state.stage, "TESTS_FROZEN"):
+            with self._trace_stage("Stage 2: Test Review") as stage_trace:
+                start = self._start_iteration(state, "TESTS_GENERATED")
+                cumulative_test_blocking: list[str] = []
+                for iteration in range(start, self.max_revisions + 1):
+                    self._log_stage_header(f"Stage 2: Test Review (iter {iteration})")
+                    with self._trace_iteration(
+                        "Stage 2: Test Review", iteration
+                    ) as trace_iteration:
+                        before_file_hashes = self._repo_file_hashes()
+                        prompt = self.prompts.render(
+                            role="reviewer",
+                            task=self.task,
+                            spec_path=self.spec_path,
+                            stage_name="Stage 2: Test Review",
+                            stage_instruction=(
+                                "Review only the test files relevant to the approved spec for this task. Ignore unrelated workspace changes outside the spec scope. "
+                                "Return only the canonical review decision JSON."
+                            ),
+                            iteration=iteration,
+                            clarifications=clarifications,
+                        )
+                        decision = self._run_review_role(
+                            prompt=prompt,
+                            stage_label="Stage 2: Test Review",
+                            before_file_hashes=before_file_hashes,
+                        )
+                        if decision.decision == "approve":
+                            trace_iteration["outcome"] = "approve"
+                        elif iteration == self.max_revisions:
+                            trace_iteration["outcome"] = "cap-exit"
+                        else:
+                            trace_iteration["outcome"] = decision.decision
+                    if decision.fallback_used:
+                        self.logger.log("[review] fallback normalization path used")
+                    self.logger.log(f"Decision: {decision.decision}")
+                    if decision.decision == "approve":
+                        stage_trace["outcome"] = "approve"
+                        frozen_tests_hash = self._tests_hash()
+                        self._save_state("TESTS_FROZEN", frozen_tests_hash=frozen_tests_hash)
+                        break
+                    if iteration == self.max_revisions:
+                        stage_trace["outcome"] = "cap-exit"
+                        raise PipelineError(
+                            f"FAIL: test revision cap reached after {self.max_revisions} iterations.",
+                            EXIT_TEST_REVISION_CAP,
+                        )
+                    self._log_stage_header(f"Stage 2b: Test Revision (iter {iteration})")
+                    before_tests_hash = self._tests_hash()
+                    prior_test_blocking = list(cumulative_test_blocking)
+                    cumulative_test_blocking.extend(
+                        item for item in decision.blocking if item not in cumulative_test_blocking
+                    )
+                    revise_prompt = self.prompts.render(
+                        role="test-writer",
+                        task=self.task,
+                        spec_path=self.spec_path,
+                        stage_name="Stage 2b: Test Revision",
+                        stage_instruction=(
+                            "Revise the test suite to address the reviewer blocking feedback. "
+                            f"Do not touch production code. Re-run `{_describe_validation_suite(self.config)}` after revisions."
+                        ),
+                        iteration=iteration,
+                        reviewer_feedback=decision.blocking,
+                        prior_feedback=prior_test_blocking,
+                        clarifications=clarifications,
+                    )
+                    execution = self._run_role(
+                        role="test-writer",
+                        prompt=revise_prompt,
+                        stage_label="Stage 2b: Test Revision",
+                    )
+                    self._ensure_tests_stage_effect(
+                        before_hash=before_tests_hash,
+                        execution=execution,
+                        stage_label="Stage 2b: Test Revision",
+                    )
+                    self._save_state("TESTS_GENERATED", iteration=iteration + 1)
             self.logger.log("")
             self.logger.log(">>> Tests frozen <<<")
             state = self._load_state()
@@ -1377,115 +1471,129 @@ class PipelineRunner:
 
         if not self._past(state.stage, "CODE_IMPLEMENTED"):
             self._log_stage_header("Stage 3: Implementation")
-            prompt = self.prompts.render(
-                role="implementer",
-                task=self.task,
-                spec_path=self.spec_path,
-                stage_name="Stage 3: Implementation",
-                stage_instruction=(
-                    "Read the approved spec and frozen tests. Implement the minimal production code "
-                    "needed to make the tests pass. Do not modify frozen tests. Run "
-                    f"`{_describe_validation_suite(self.config)}` to verify."
-                ),
-            )
-            self._run_role(
-                role="implementer",
-                prompt=prompt,
-                stage_label="Stage 3: Implementation",
-            )
-            self._enforce_test_freeze(frozen_tests_hash)
-            self._save_state("CODE_IMPLEMENTED", frozen_tests_hash=frozen_tests_hash)
+            with self._trace_stage("Stage 3: Implementation"):
+                prompt = self.prompts.render(
+                    role="implementer",
+                    task=self.task,
+                    spec_path=self.spec_path,
+                    stage_name="Stage 3: Implementation",
+                    stage_instruction=(
+                        "Read the approved spec and frozen tests. Implement the minimal production code "
+                        "needed to make the tests pass. Do not modify frozen tests. Run "
+                        f"`{_describe_validation_suite(self.config)}` to verify."
+                    ),
+                )
+                self._run_role(
+                    role="implementer",
+                    prompt=prompt,
+                    stage_label="Stage 3: Implementation",
+                )
+                self._enforce_test_freeze(frozen_tests_hash)
+                self._save_state("CODE_IMPLEMENTED", frozen_tests_hash=frozen_tests_hash)
             state = self._load_state()
 
         if not self._past(state.stage, "CODE_VALIDATED"):
             self._log_stage_header("Stage 4: Validation")
-            prompt = self.prompts.render(
-                role="implementer",
-                task=self.task,
-                spec_path=self.spec_path,
-                stage_name="Stage 4: Validation",
-                stage_instruction=(
-                    f"Validate the implementation by running `{_describe_validation_suite(self.config)}`. Fix any test failures. "
-                    "Do not modify frozen tests. "
-                    "Do NOT run training scripts -- training is handled "
-                    "by a later pipeline stage. If you need to verify a script's CLI args parse "
-                    "correctly, use `--help` only."
-                ),
-            )
-            self._run_role(
-                role="implementer",
-                prompt=prompt,
-                stage_label="Stage 4: Validation",
-            )
-            self._enforce_test_freeze(frozen_tests_hash)
-            self._save_state("CODE_VALIDATED", frozen_tests_hash=frozen_tests_hash)
-            state = self._load_state()
-
-        if not self._past(state.stage, "CODE_REVIEWED"):
-            start = self._start_iteration(state, "CODE_VALIDATED")
-            cumulative_code_blocking: list[str] = []
-            for iteration in range(start, self.max_revisions + 1):
-                self._log_stage_header(f"Stage 5: Code Review (iter {iteration})")
-                before_file_hashes = self._repo_file_hashes()
+            with self._trace_stage("Stage 4: Validation"):
                 prompt = self.prompts.render(
-                    role="reviewer",
-                    task=self.task,
-                    spec_path=self.spec_path,
-                    stage_name="Stage 5: Code Review",
-                    stage_instruction=(
-                        "Review only the implementation and frozen tests relevant to the approved spec for this task. Ignore unrelated workspace changes outside the spec scope. "
-                        f"Observe test status with `{_describe_validation_suite(self.config)}` and return only the "
-                        "canonical review decision JSON."
-                    ),
-                    iteration=iteration,
-                    clarifications=clarifications,
-                )
-                decision = self._run_review_role(
-                    prompt=prompt,
-                    stage_label="Stage 5: Code Review",
-                    before_file_hashes=before_file_hashes,
-                )
-                if decision.fallback_used:
-                    self.logger.log("[review] fallback normalization path used")
-                self.logger.log(f"Decision: {decision.decision}")
-                if decision.decision == "approve":
-                    self._save_state("CODE_REVIEWED", frozen_tests_hash=frozen_tests_hash)
-                    break
-                if iteration == self.max_revisions:
-                    raise PipelineError(
-                        f"FAIL: code revision cap reached after {self.max_revisions} iterations.",
-                        EXIT_CODE_REVISION_CAP,
-                    )
-                self._log_stage_header(f"Stage 5b: Code Revision (iter {iteration})")
-                prior_code_blocking = list(cumulative_code_blocking)
-                cumulative_code_blocking.extend(
-                    item for item in decision.blocking if item not in cumulative_code_blocking
-                )
-                revise_prompt = self.prompts.render(
                     role="implementer",
                     task=self.task,
                     spec_path=self.spec_path,
-                    stage_name="Stage 5b: Code Revision",
+                    stage_name="Stage 4: Validation",
                     stage_instruction=(
-                        "Revise the implementation to address the reviewer blocking feedback. "
-                        f"Do not modify frozen tests. Re-run `{_describe_validation_suite(self.config)}` after revisions."
+                        f"Validate the implementation by running `{_describe_validation_suite(self.config)}`. Fix any test failures. "
+                        "Do not modify frozen tests. "
+                        "Do NOT run training scripts -- training is handled "
+                        "by a later pipeline stage. If you need to verify a script's CLI args parse "
+                        "correctly, use `--help` only."
                     ),
-                    iteration=iteration,
-                    reviewer_feedback=decision.blocking,
-                    prior_feedback=prior_code_blocking,
                 )
                 self._run_role(
                     role="implementer",
-                    prompt=revise_prompt,
-                    stage_label="Stage 5b: Code Revision",
+                    prompt=prompt,
+                    stage_label="Stage 4: Validation",
                 )
                 self._enforce_test_freeze(frozen_tests_hash)
-                self._run_pytest_gate("Gate: pytest after code revision")
-                self._save_state(
-                    "CODE_VALIDATED",
-                    iteration=iteration + 1,
-                    frozen_tests_hash=frozen_tests_hash,
-                )
+                self._save_state("CODE_VALIDATED", frozen_tests_hash=frozen_tests_hash)
+            state = self._load_state()
+
+        if not self._past(state.stage, "CODE_REVIEWED"):
+            with self._trace_stage("Stage 5: Code Review") as stage_trace:
+                start = self._start_iteration(state, "CODE_VALIDATED")
+                cumulative_code_blocking: list[str] = []
+                for iteration in range(start, self.max_revisions + 1):
+                    self._log_stage_header(f"Stage 5: Code Review (iter {iteration})")
+                    with self._trace_iteration(
+                        "Stage 5: Code Review", iteration
+                    ) as trace_iteration:
+                        before_file_hashes = self._repo_file_hashes()
+                        prompt = self.prompts.render(
+                            role="reviewer",
+                            task=self.task,
+                            spec_path=self.spec_path,
+                            stage_name="Stage 5: Code Review",
+                            stage_instruction=(
+                                "Review only the implementation and frozen tests relevant to the approved spec for this task. Ignore unrelated workspace changes outside the spec scope. "
+                                f"Observe test status with `{_describe_validation_suite(self.config)}` and return only the "
+                                "canonical review decision JSON."
+                            ),
+                            iteration=iteration,
+                            clarifications=clarifications,
+                        )
+                        decision = self._run_review_role(
+                            prompt=prompt,
+                            stage_label="Stage 5: Code Review",
+                            before_file_hashes=before_file_hashes,
+                        )
+                        if decision.decision == "approve":
+                            trace_iteration["outcome"] = "approve"
+                        elif iteration == self.max_revisions:
+                            trace_iteration["outcome"] = "cap-exit"
+                        else:
+                            trace_iteration["outcome"] = decision.decision
+                    if decision.fallback_used:
+                        self.logger.log("[review] fallback normalization path used")
+                    self.logger.log(f"Decision: {decision.decision}")
+                    if decision.decision == "approve":
+                        stage_trace["outcome"] = "approve"
+                        self._save_state("CODE_REVIEWED", frozen_tests_hash=frozen_tests_hash)
+                        break
+                    if iteration == self.max_revisions:
+                        stage_trace["outcome"] = "cap-exit"
+                        raise PipelineError(
+                            f"FAIL: code revision cap reached after {self.max_revisions} iterations.",
+                            EXIT_CODE_REVISION_CAP,
+                        )
+                    self._log_stage_header(f"Stage 5b: Code Revision (iter {iteration})")
+                    prior_code_blocking = list(cumulative_code_blocking)
+                    cumulative_code_blocking.extend(
+                        item for item in decision.blocking if item not in cumulative_code_blocking
+                    )
+                    revise_prompt = self.prompts.render(
+                        role="implementer",
+                        task=self.task,
+                        spec_path=self.spec_path,
+                        stage_name="Stage 5b: Code Revision",
+                        stage_instruction=(
+                            "Revise the implementation to address the reviewer blocking feedback. "
+                            f"Do not modify frozen tests. Re-run `{_describe_validation_suite(self.config)}` after revisions."
+                        ),
+                        iteration=iteration,
+                        reviewer_feedback=decision.blocking,
+                        prior_feedback=prior_code_blocking,
+                    )
+                    self._run_role(
+                        role="implementer",
+                        prompt=revise_prompt,
+                        stage_label="Stage 5b: Code Revision",
+                    )
+                    self._enforce_test_freeze(frozen_tests_hash)
+                    self._run_pytest_gate("Gate: pytest after code revision")
+                    self._save_state(
+                        "CODE_VALIDATED",
+                        iteration=iteration + 1,
+                        frozen_tests_hash=frozen_tests_hash,
+                    )
             state = self._load_state()
 
         if state.stage == "CODE_REVIEWED":
@@ -1595,6 +1703,33 @@ class PipelineRunner:
         self.logger.log("")
         self.logger.log(f"=== Pipeline COMPLETE: {self.task} ===")
         return EXIT_SUCCESS
+
+    def run(self) -> int:
+        # Reset tracing globals at run boundaries so repeated runs in one process
+        # do not leak providers/exporters into later unconfigured executions.
+        tracing.shutdown_tracing()
+        if hasattr(tracing, "_tracer"):
+            tracing._tracer = None  # type: ignore[attr-defined]
+        tracing.init_tracing()
+        try:
+            with tracing.span("pipeline.run"):
+                self._set_trace_attributes(
+                    task=self.task,
+                    provider=self.provider.name,
+                    stage="run",
+                    stage_label="PipelineRunner.run",
+                )
+                try:
+                    result = self._run_impl()
+                except Exception:
+                    self._set_trace_attributes(outcome="error")
+                    raise
+                self._set_trace_attributes(outcome="success")
+                return result
+        finally:
+            tracing.shutdown_tracing()
+            if hasattr(tracing, "_tracer"):
+                tracing._tracer = None  # type: ignore[attr-defined]
 
 
 def run_from_cli(

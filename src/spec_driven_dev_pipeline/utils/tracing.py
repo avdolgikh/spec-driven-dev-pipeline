@@ -74,7 +74,12 @@ def init_tracing() -> None:
     service_name = os.environ.get("OTEL_SERVICE_NAME", _DEFAULT_SERVICE_NAME)
     headers = os.environ.get("OTEL_EXPORTER_OTLP_HEADERS")
 
-    resource = Resource.create({"service.name": service_name})
+    resource = Resource.create(
+        {
+            "service.name": service_name,
+            "openinference.project.name": service_name,
+        }
+    )
     provider = TracerProvider(resource=resource)
     exporter = _build_otlp_exporter(endpoint=endpoint, headers=headers)
     processor = BatchSpanProcessor(exporter)
