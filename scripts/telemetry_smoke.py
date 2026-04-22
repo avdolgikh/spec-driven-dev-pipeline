@@ -109,7 +109,9 @@ def main() -> int:
         )
         return 2
 
-    print(f"Emitting spans to {endpoint} (service={os.environ.get('OTEL_SERVICE_NAME', 'default')})")
+    print(
+        f"Emitting spans to {endpoint} (service={os.environ.get('OTEL_SERVICE_NAME', 'default')})"
+    )
 
     tmp = Path(tempfile.mkdtemp(prefix="pipeline-smoke-"))
     try:
